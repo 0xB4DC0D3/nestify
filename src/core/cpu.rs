@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::bus::Bus;
+use super::clock::Clock;
 use super::registers::Register;
 use super::registers::cpu::status::{CpuStatusRegister, CpuStatusRegisterFlags};
 use super::memory::Memory;
@@ -21,22 +22,6 @@ pub enum AddressingMode {
     Indirect,
     IndexedIndirect,
     IndirectIndexed,
-}
-
-struct InternalState {
-    current_instruction: String,
-    args_length: u8,
-}
-
-pub struct Cpu {
-    register_a: u8,
-    register_x: u8,
-    register_y: u8,
-    status: CpuStatusRegister,
-    stack_pointer: u8,
-    program_counter: u16,
-    bus: Rc<RefCell<Bus>>,
-    internal_state: Option<InternalState>,
 }
 
 pub struct Instruction<'a> {
@@ -318,8 +303,25 @@ static INSTRUCTIONS: [Instruction; 256] = [
         Instruction::new(0xFF, "ISC", 3, 7, AddressingMode::AbsoluteX),
 ];
 
+struct InternalState {
+    current_instruction: String,
+    args_length: u8,
+}
+
+pub struct Cpu {
+    register_a: u8,
+    register_x: u8,
+    register_y: u8,
+    status: CpuStatusRegister,
+    stack_pointer: u8,
+    program_counter: u16,
+    internal_state: Option<InternalState>,
+    bus: Rc<RefCell<Bus>>,
+    clock: Rc<RefCell<Clock>>,
+}
+
 impl Cpu {
-    pub fn new(bus: &Rc<RefCell<Bus>>) -> Self {
+    pub fn new(bus: &Rc<RefCell<Bus>>, clock: &Rc<RefCell<Clock>>) -> Self {
         Self {
             register_a: 0x00,
             register_x: 0x00,
@@ -327,8 +329,9 @@ impl Cpu {
             status: CpuStatusRegister::new(),
             stack_pointer: 0xFD,
             program_counter: 0x8000,
-            bus: bus.clone(),
             internal_state: None,
+            bus: bus.clone(),
+            clock: clock.clone(),
         }
     }
 
@@ -363,7 +366,7 @@ impl Cpu {
         self.status = CpuStatusRegister::new();
         self.stack_pointer = 0xFD;
         self.program_counter = self.read_u16(0xFFFC);
-        // TODO: add here +7 cycles
+        self.clock.borrow_mut().tick(7);
     }
 
     fn is_page_cross(&self, page1: u16, page2: u16) -> bool {
@@ -483,7 +486,7 @@ impl Cpu {
         self.register_a = result as u8;
 
         if additional_cycle {
-            // TODO: add additional cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -498,7 +501,7 @@ impl Cpu {
         self.register_a = result;
 
         if additional_cycle {
-            // TODO: add additional cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -521,13 +524,11 @@ impl Cpu {
         } else {
             self.register_a = result;
         }
-
-        // TODO: add ticks
     }
 
     fn branch(&mut self, flag_active: bool) {
         if flag_active {
-            // TODO: add +1 cycle
+            self.clock.borrow_mut().tick(1);
 
             let (memory_pointer, _) = self.get_memory_data(AddressingMode::Relative)
                 .expect("Invalid Addressing mode for branch instructions!");
@@ -537,7 +538,7 @@ impl Cpu {
             let jump_pc = (next_pc as i16).wrapping_add(offset) as u16;
 
             if self.is_page_cross(next_pc, jump_pc) {
-                // TODO: add +1 cycle
+                self.clock.borrow_mut().tick(1);
             }
 
             self.program_counter = jump_pc;
@@ -568,8 +569,6 @@ impl Cpu {
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Overflow, memory_value & 0x40 == 0x40);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, memory_value & 0x80 == 0x80);
-
-        // TODO: add ticks
     }
 
     fn execute_bmi(&mut self) {
@@ -598,26 +597,18 @@ impl Cpu {
 
     fn execute_clc(&mut self) {
         self.status.set_flag(CpuStatusRegisterFlags::Carry, false);
-
-        // TODO: add ticks
     }
 
     fn execute_cld(&mut self) {
         self.status.set_flag(CpuStatusRegisterFlags::DecimalMode, false);
-
-        // TODO: add ticks
     }
 
     fn execute_cli(&mut self) {
         self.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, false);
-
-        // TODO: add ticks
     }
 
     fn execute_clv(&mut self) {
         self.status.set_flag(CpuStatusRegisterFlags::Overflow, false);
-
-        // TODO: add ticks
     }
 
     fn compare(&mut self, addressing_mode: AddressingMode, register_value: u8) {
@@ -632,28 +623,20 @@ impl Cpu {
         self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
 
         if additional_cycle {
-            // TODO: handle additional cycle
+            self.clock.borrow_mut().tick(1);
         }
-
-        // TODO: handle cycles
     }
 
     fn execute_cmp(&mut self, addressing_mode: AddressingMode) {
         self.compare(addressing_mode, self.register_a);
-
-        // TODO: handle cycles
     }
 
     fn execute_cpx(&mut self, addressing_mode: AddressingMode) {
         self.compare(addressing_mode, self.register_x);
-
-        // TODO: handle cycles
     }
 
     fn execute_cpy(&mut self, addressing_mode: AddressingMode) {
         self.compare(addressing_mode, self.register_y);
-
-        // TODO: handle cycles
     }
 
     fn execute_dec(&mut self, addressing_mode: AddressingMode) {
@@ -666,8 +649,6 @@ impl Cpu {
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
         self.write(memory_pointer, result);
-
-        // TODO: handle cycles
     }
 
     fn execute_dex(&mut self) {
@@ -697,10 +678,8 @@ impl Cpu {
         self.register_a = result;
 
         if additional_cycle {
-            // TODO: handle additional cycle
+            self.clock.borrow_mut().tick(1);
         }
-
-        // TODO: handle cycles
     }
 
     fn execute_inc(&mut self, addressing_mode: AddressingMode) {
@@ -713,8 +692,6 @@ impl Cpu {
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
         self.write(memory_pointer, result);
-
-        // TODO: handle cycles
     }
 
     fn execute_inx(&mut self) {
@@ -758,7 +735,7 @@ impl Cpu {
         self.register_a = memory_value;
 
         if additional_cycle {
-            // TODO: handle add. cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -773,7 +750,7 @@ impl Cpu {
         self.register_x = memory_value;
 
         if additional_cycle {
-            // TODO: handle add. cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -788,7 +765,7 @@ impl Cpu {
         self.register_y = memory_value;
 
         if additional_cycle {
-            // TODO: handle add. cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -828,7 +805,7 @@ impl Cpu {
         self.register_a = result;
 
         if additional_cycle {
-            // TODO: handle add. cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -925,7 +902,7 @@ impl Cpu {
         self.register_a = result as u8;
 
         if additional_cycle {
-            // TODO: add additional cycle
+            self.clock.borrow_mut().tick(1);
         }
     }
 
@@ -1077,8 +1054,10 @@ impl Cpu {
             _ => panic!("Illegal opcode {:#02X} occured!", opcode),
         }
 
+        self.clock.borrow_mut().tick(cycles as usize);
+
         if current_program_counter == self.program_counter {
-            let args_length = self.internal_state.as_ref().unwrap().args_length as u16;
+            let args_length = (bytes - 1) as u16;
 
             self.program_counter = self.program_counter.wrapping_add(args_length);
         }
@@ -1108,7 +1087,8 @@ mod tests {
     #[test]
     fn test_adc_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 127;
         cpu.write(0x0000, 0x69);
         cpu.write(0x0001, 0x7F);
@@ -1138,7 +1118,8 @@ mod tests {
     #[test]
     fn test_and_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 127;
         cpu.write(0x0000, 0x29);
         cpu.write(0x0001, 0x7E);
@@ -1153,7 +1134,8 @@ mod tests {
     #[test]
     fn test_asl_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 0x80;
         cpu.execute_asl(AddressingMode::Accumulator);
 
@@ -1166,7 +1148,8 @@ mod tests {
     #[test]
     fn test_bcc_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1183,7 +1166,8 @@ mod tests {
     #[test]
     fn test_bcs_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1200,7 +1184,8 @@ mod tests {
     #[test]
     fn test_beq_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1217,7 +1202,8 @@ mod tests {
     #[test]
     fn test_bit_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
         cpu.program_counter = 0x0001;
@@ -1249,7 +1235,8 @@ mod tests {
     #[test]
     fn test_bmi_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1266,7 +1253,8 @@ mod tests {
     #[test]
     fn test_bne_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1283,7 +1271,8 @@ mod tests {
     #[test]
     fn test_bpl_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1300,7 +1289,8 @@ mod tests {
     #[test]
     fn test_bvc_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1317,7 +1307,8 @@ mod tests {
     #[test]
     fn test_bvs_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
         cpu.write(0x0001, 0x04);
@@ -1334,7 +1325,8 @@ mod tests {
     #[test] 
     fn test_clc_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
         cpu.execute_clc();
 
@@ -1344,7 +1336,8 @@ mod tests {
     #[test]
     fn test_cld_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, true);
         cpu.execute_cld();
 
@@ -1354,7 +1347,8 @@ mod tests {
     #[test]
     fn test_cli_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
         cpu.execute_cli();
 
@@ -1364,7 +1358,8 @@ mod tests {
     #[test]
     fn test_clv_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Overflow, true);
         cpu.execute_clv();
 
@@ -1374,7 +1369,8 @@ mod tests {
     #[test]
     fn test_cmp_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 100;
         cpu.write(0x0000, 99);
         cpu.program_counter = 0x0000;
@@ -1404,7 +1400,8 @@ mod tests {
     #[test]
     fn test_cpx_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 100;
         cpu.write(0x0000, 99);
         cpu.program_counter = 0x0000;
@@ -1434,7 +1431,8 @@ mod tests {
     #[test]
     fn test_cpy_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 100;
         cpu.write(0x0000, 99);
         cpu.program_counter = 0x0000;
@@ -1464,7 +1462,8 @@ mod tests {
     #[test]
     fn test_dec_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.write(0x0001, 129);
         cpu.write(0x0002, 0x1);
         cpu.program_counter = 0x0002;
@@ -1479,7 +1478,8 @@ mod tests {
     #[test]
     fn test_dex_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
         cpu.execute_dex();
 
@@ -1491,7 +1491,8 @@ mod tests {
     #[test]
     fn test_dey_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 128;
         cpu.execute_dey();
 
@@ -1503,7 +1504,8 @@ mod tests {
     #[test]
     fn test_eor_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 12;
         cpu.write(0x0000, 37);
         cpu.program_counter = 0x0000;
@@ -1517,7 +1519,8 @@ mod tests {
     #[test]
     fn test_inc_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.write(0x0001, 129);
         cpu.write(0x0002, 0x1);
         cpu.program_counter = 0x0002;
@@ -1532,7 +1535,8 @@ mod tests {
     #[test]
     fn test_inx_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-        let mut cpu = Cpu::new(&bus);
+        let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
         cpu.execute_inx();
 
@@ -1544,7 +1548,8 @@ mod tests {
     #[test]
     fn test_iny_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 128;
         cpu.execute_iny();
@@ -1557,7 +1562,8 @@ mod tests {
     #[test]
     fn test_jmp_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xFF);
@@ -1570,7 +1576,8 @@ mod tests {
     #[test]
     fn test_jsr_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
         cpu.program_counter = 0xDEAD;
@@ -1590,7 +1597,8 @@ mod tests {
     #[test]
     fn test_lda_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xAA);
@@ -1611,7 +1619,8 @@ mod tests {
     #[test]
     fn test_ldx_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xAA);
@@ -1632,7 +1641,8 @@ mod tests {
     #[test]
     fn test_ldy_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xAA);
@@ -1653,7 +1663,8 @@ mod tests {
     #[test]
     fn test_lsr_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x81;
         cpu.execute_lsr(AddressingMode::Accumulator);
@@ -1667,7 +1678,8 @@ mod tests {
     #[test]
     fn test_ora_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x81;
         cpu.program_counter = 0x0000;
@@ -1682,7 +1694,8 @@ mod tests {
     #[test]
     fn test_pha_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
 
@@ -1696,7 +1709,8 @@ mod tests {
     #[test]
     fn test_php_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
         
@@ -1710,7 +1724,8 @@ mod tests {
     #[test]
     fn test_pla_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x150, 0xFF);
         cpu.stack_pointer = 0x4F;
@@ -1732,7 +1747,8 @@ mod tests {
     #[test]
     fn test_plp_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x150, 0xFF);
         cpu.stack_pointer = 0x4F;
@@ -1744,7 +1760,8 @@ mod tests {
     #[test]
     fn test_rol_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
         cpu.write(0x0000, 0xAA);
@@ -1768,7 +1785,8 @@ mod tests {
     #[test]
     fn test_ror_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
         cpu.write(0x0000, 0xAA);
@@ -1792,7 +1810,8 @@ mod tests {
     #[test]
     fn test_rti_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x0152, 0xFF);
         cpu.write(0x0151, 0xAB);
@@ -1807,7 +1826,8 @@ mod tests {
     #[test]
     fn test_rts_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x0151, 0xFF);
         cpu.write(0x0150, 0xAA);
@@ -1820,7 +1840,8 @@ mod tests {
     #[test]
     fn test_sbc_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x01;
         cpu.program_counter = 0x0000;
@@ -1850,7 +1871,8 @@ mod tests {
     #[test]
     fn test_sec_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
         cpu.execute_sec();
@@ -1861,7 +1883,8 @@ mod tests {
     #[test]
     fn test_sed_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, false);
         cpu.execute_sed();
@@ -1872,7 +1895,8 @@ mod tests {
     #[test]
     fn test_sei_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, false);
         cpu.execute_sei();
@@ -1883,7 +1907,8 @@ mod tests {
     #[test]
     fn test_sta_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
         cpu.write(0x0001, 0x00);
@@ -1897,7 +1922,8 @@ mod tests {
     #[test]
     fn test_stx_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xFF;
         cpu.write(0x0001, 0x00);
@@ -1911,7 +1937,8 @@ mod tests {
     #[test]
     fn test_sty_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 0xFF;
         cpu.write(0x0001, 0x00);
@@ -1925,7 +1952,8 @@ mod tests {
     #[test]
     fn test_tax_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
         cpu.execute_tax();
@@ -1944,7 +1972,8 @@ mod tests {
     #[test]
     fn test_tay_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
         cpu.execute_tay();
@@ -1963,7 +1992,8 @@ mod tests {
     #[test]
     fn test_tsx_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.stack_pointer = 0xAB;
         cpu.execute_tsx();
@@ -1982,7 +2012,8 @@ mod tests {
     #[test]
     fn test_txa_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xAB;
         cpu.execute_txa();
@@ -2001,7 +2032,8 @@ mod tests {
     #[test]
     fn test_txs_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xAB;
         cpu.execute_txs();
@@ -2012,7 +2044,8 @@ mod tests {
     #[test]
     fn test_tya_instruction() {
         let bus = Rc::new(RefCell::new(Bus::new()));
-		let mut cpu = Cpu::new(&bus);
+		let clock = Rc::new(RefCell::new(Clock::new()));
+		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 0xAB;
         cpu.execute_tya();
