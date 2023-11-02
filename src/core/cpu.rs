@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use super::bus::Bus;
 use super::clock::Clock;
+use super::memorymap::MemoryMapType;
 use super::registers::Register;
 use super::registers::cpu::status::{CpuStatusRegister, CpuStatusRegisterFlags};
 use super::memory::Memory;
@@ -373,21 +374,21 @@ impl Cpu {
         (page1 & 0xFF00) != (page2 & 0xFF00)
     }
 
-    pub fn get_memory_data(&self, addressing_mode: AddressingMode) -> Option<(u16, bool)> {
+    pub fn get_memory_data(&self, addressing_mode: &AddressingMode) -> Option<(u16, bool)> {
         match addressing_mode {
-            AddressingMode::Implicit => {
+            &AddressingMode::Implicit => {
                 None
             },
-            AddressingMode::Accumulator => {
+            &AddressingMode::Accumulator => {
                 None
             },
-            AddressingMode::Immediate => {
+            &AddressingMode::Immediate => {
                 Some((self.program_counter, false))
             },
-            AddressingMode::ZeroPage => {
+            &AddressingMode::ZeroPage => {
                 Some((self.read(self.program_counter) as u16, false))
             },
-            AddressingMode::ZeroPageX => {
+            &AddressingMode::ZeroPageX => {
                 let pointer = self
                     .read(self.program_counter);
 
@@ -398,7 +399,7 @@ impl Cpu {
 
                 Some((memory_pointer as u16, is_page_cross))
             },
-            AddressingMode::ZeroPageY => {
+            &AddressingMode::ZeroPageY => {
                 let pointer = self
                     .read(self.program_counter);
 
@@ -409,13 +410,13 @@ impl Cpu {
 
                 Some((memory_pointer as u16, is_page_cross))
             },
-            AddressingMode::Relative => {
+            &AddressingMode::Relative => {
                 Some((self.read(self.program_counter) as u16, false))
             },
-            AddressingMode::Absolute => {
+            &AddressingMode::Absolute => {
                 Some((self.read_u16(self.program_counter), false))
             },
-            AddressingMode::AbsoluteX => {
+            &AddressingMode::AbsoluteX => {
                 let pointer = self
                     .read_u16(self.program_counter);
 
@@ -426,7 +427,7 @@ impl Cpu {
 
                 Some((memory_pointer, is_page_cross))
             },
-            AddressingMode::AbsoluteY => {
+            &AddressingMode::AbsoluteY => {
                 let pointer = self
                     .read_u16(self.program_counter);
 
@@ -437,13 +438,13 @@ impl Cpu {
 
                 Some((memory_pointer, is_page_cross))
             },
-            AddressingMode::Indirect => {
+            &AddressingMode::Indirect => {
                 let pointer = self.read_u16(self.program_counter);
                 let memory_pointer = self.read_u16(pointer);
 
                 Some((memory_pointer, false))
             },
-            AddressingMode::IndexedIndirect => {
+            &AddressingMode::IndexedIndirect => {
                 let pointer = self
                     .read(self.program_counter)
                     .wrapping_add(self.register_x) as u16;
@@ -452,7 +453,7 @@ impl Cpu {
 
                 Some((memory_pointer, false))
             },
-            AddressingMode::IndirectIndexed => {
+            &AddressingMode::IndirectIndexed => {
                 let pointer = self
                     .read(self.program_counter) as u16;
 
@@ -469,8 +470,8 @@ impl Cpu {
         }
     }
 
-    fn execute_adc(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_adc(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for ADC instruction!");
 
         let a = self.register_a as u16;
@@ -490,8 +491,8 @@ impl Cpu {
         }
     }
 
-    fn execute_and(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_and(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for AND instruction!");
 
         let result = self.register_a & self.read(memory_pointer);
@@ -505,8 +506,8 @@ impl Cpu {
         }
     }
 
-    fn execute_asl(&mut self, addressing_mode: AddressingMode) {
-        let memory_data = self.get_memory_data(addressing_mode);
+    fn execute_asl(&mut self, addressing_mode: &AddressingMode) {
+        let memory_data = self.get_memory_data(&addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
@@ -530,7 +531,7 @@ impl Cpu {
         if flag_active {
             self.clock.borrow_mut().tick(1);
 
-            let (memory_pointer, _) = self.get_memory_data(AddressingMode::Relative)
+            let (memory_pointer, _) = self.get_memory_data(&&AddressingMode::Relative)
                 .expect("Invalid Addressing mode for branch instructions!");
 
             let offset = memory_pointer as i16;
@@ -559,8 +560,8 @@ impl Cpu {
         self.branch(self.status.get_flag(CpuStatusRegisterFlags::Zero));
     }
 
-    fn execute_bit(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_bit(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for BIT instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -611,8 +612,8 @@ impl Cpu {
         self.status.set_flag(CpuStatusRegisterFlags::Overflow, false);
     }
 
-    fn compare(&mut self, addressing_mode: AddressingMode, register_value: u8) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn compare(&mut self, addressing_mode: &AddressingMode, register_value: u8) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for CMP/CPX/CPY instructions!");
 
         let memory_value = self.read(memory_pointer);
@@ -627,20 +628,20 @@ impl Cpu {
         }
     }
 
-    fn execute_cmp(&mut self, addressing_mode: AddressingMode) {
-        self.compare(addressing_mode, self.register_a);
+    fn execute_cmp(&mut self, addressing_mode: &AddressingMode) {
+        self.compare(&addressing_mode, self.register_a);
     }
 
-    fn execute_cpx(&mut self, addressing_mode: AddressingMode) {
-        self.compare(addressing_mode, self.register_x);
+    fn execute_cpx(&mut self, addressing_mode: &AddressingMode) {
+        self.compare(&addressing_mode, self.register_x);
     }
 
-    fn execute_cpy(&mut self, addressing_mode: AddressingMode) {
-        self.compare(addressing_mode, self.register_y);
+    fn execute_cpy(&mut self, addressing_mode: &AddressingMode) {
+        self.compare(&addressing_mode, self.register_y);
     }
 
-    fn execute_dec(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_dec(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for DEC instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -667,8 +668,8 @@ impl Cpu {
         self.register_y = result;
     }
 
-    fn execute_eor(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_eor(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for EOR instruction!");
 
         let result = self.register_a ^ self.read(memory_pointer);
@@ -682,8 +683,8 @@ impl Cpu {
         }
     }
 
-    fn execute_inc(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_inc(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for INC instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -710,22 +711,22 @@ impl Cpu {
         self.register_y = result;
     }
 
-    fn execute_jmp(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_jmp(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for JMP instruction!");
 
         self.program_counter = memory_pointer;
     }
 
     fn execute_jsr(&mut self) {
-        let (memory_pointer, _) = self.get_memory_data(AddressingMode::Absolute).unwrap();
+        let (memory_pointer, _) = self.get_memory_data(&&AddressingMode::Absolute).unwrap();
 
         self.push_stack_u16(self.program_counter.wrapping_add(2));
         self.program_counter = memory_pointer;
     }
 
-    fn execute_lda(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_lda(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for LDA instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -739,8 +740,8 @@ impl Cpu {
         }
     }
 
-    fn execute_ldx(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_ldx(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for LDA instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -754,8 +755,8 @@ impl Cpu {
         }
     }
 
-    fn execute_ldy(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_ldy(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for LDA instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -769,8 +770,8 @@ impl Cpu {
         }
     }
 
-    fn execute_lsr(&mut self, addressing_mode: AddressingMode) {
-        let memory_data = self.get_memory_data(addressing_mode);
+    fn execute_lsr(&mut self, addressing_mode: &AddressingMode) {
+        let memory_data = self.get_memory_data(&addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
@@ -794,8 +795,8 @@ impl Cpu {
         // Do nothing
     }
 
-    fn execute_ora(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_ora(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for ORA instruction!");
         
         let result = self.register_a | self.read(memory_pointer);
@@ -831,8 +832,8 @@ impl Cpu {
         self.status.set(status);
     }
 
-    fn execute_rol(&mut self, addressing_mode: AddressingMode) {
-        let memory_data = self.get_memory_data(addressing_mode);
+    fn execute_rol(&mut self, addressing_mode: &AddressingMode) {
+        let memory_data = self.get_memory_data(&addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
@@ -852,8 +853,8 @@ impl Cpu {
         }
     }
 
-    fn execute_ror(&mut self, addressing_mode: AddressingMode) {
-        let memory_data = self.get_memory_data(addressing_mode);
+    fn execute_ror(&mut self, addressing_mode: &AddressingMode) {
+        let memory_data = self.get_memory_data(&addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
@@ -885,8 +886,8 @@ impl Cpu {
         self.program_counter = self.pop_stack_u16();
     }
 
-    fn execute_sbc(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
+    fn execute_sbc(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for ADC instruction!");
 
         let a = self.register_a as u16;
@@ -918,22 +919,22 @@ impl Cpu {
         self.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
     }
 
-    fn execute_sta(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_sta(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for STA instruction!");
 
         self.write(memory_pointer, self.register_a);
     }
 
-    fn execute_stx(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_stx(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for STA instruction!");
 
         self.write(memory_pointer, self.register_x);
     }
 
-    fn execute_sty(&mut self, addressing_mode: AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+    fn execute_sty(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
             .expect("Invalid Addressing mode for STA instruction!");
 
         self.write(memory_pointer, self.register_y);
@@ -997,13 +998,13 @@ impl Cpu {
         });
 
         match name {
-            "ADC" => self.execute_adc(addressing_mode),
-            "AND" => self.execute_and(addressing_mode),
-            "ASL" => self.execute_asl(addressing_mode),
+            "ADC" => self.execute_adc(&addressing_mode),
+            "AND" => self.execute_and(&addressing_mode),
+            "ASL" => self.execute_asl(&addressing_mode),
             "BCC" => self.execute_bcc(),
             "BCS" => self.execute_bcs(),
             "BEQ" => self.execute_beq(),
-            "BIT" => self.execute_bit(addressing_mode),
+            "BIT" => self.execute_bit(&addressing_mode),
             "BMI" => self.execute_bne(),
             "BPL" => self.execute_bpl(),
             "BRK" => self.execute_brk(),
@@ -1012,39 +1013,39 @@ impl Cpu {
             "CLC" => self.execute_clc(),
             "CLD" => self.execute_cld(),
             "CLV" => self.execute_clv(),
-            "CMP" => self.execute_cmp(addressing_mode),
-            "CPX" => self.execute_cpx(addressing_mode),
-            "CPY" => self.execute_cpy(addressing_mode),
-            "DEC" => self.execute_dec(addressing_mode),
+            "CMP" => self.execute_cmp(&addressing_mode),
+            "CPX" => self.execute_cpx(&addressing_mode),
+            "CPY" => self.execute_cpy(&addressing_mode),
+            "DEC" => self.execute_dec(&addressing_mode),
             "DEX" => self.execute_dex(),
             "DEY" => self.execute_dey(),
-            "EOR" => self.execute_eor(addressing_mode),
-            "INC" => self.execute_inc(addressing_mode),
+            "EOR" => self.execute_eor(&addressing_mode),
+            "INC" => self.execute_inc(&addressing_mode),
             "INX" => self.execute_inx(),
             "INY" => self.execute_iny(),
-            "JMP" => self.execute_jmp(addressing_mode),
+            "JMP" => self.execute_jmp(&addressing_mode),
             "JSR" => self.execute_jsr(),
-            "LDA" => self.execute_lda(addressing_mode),
-            "LDX" => self.execute_ldx(addressing_mode),
-            "LDY" => self.execute_ldy(addressing_mode),
-            "LSR" => self.execute_lsr(addressing_mode),
+            "LDA" => self.execute_lda(&addressing_mode),
+            "LDX" => self.execute_ldx(&addressing_mode),
+            "LDY" => self.execute_ldy(&addressing_mode),
+            "LSR" => self.execute_lsr(&addressing_mode),
             "NOP" => self.execute_nop(),
-            "ORA" => self.execute_ora(addressing_mode),
+            "ORA" => self.execute_ora(&addressing_mode),
             "PHA" => self.execute_pha(),
             "PHP" => self.execute_php(),
             "PLA" => self.execute_pla(),
             "PLP" => self.execute_plp(),
-            "ROL" => self.execute_rol(addressing_mode),
-            "ROR" => self.execute_ror(addressing_mode),
+            "ROL" => self.execute_rol(&addressing_mode),
+            "ROR" => self.execute_ror(&addressing_mode),
             "RTI" => self.execute_rti(),
             "RTS" => self.execute_rts(),
-            "SBC" => self.execute_sbc(addressing_mode),
+            "SBC" => self.execute_sbc(&addressing_mode),
             "SEC" => self.execute_sec(),
             "SED" => self.execute_sed(),
             "SEI" => self.execute_sei(),
-            "STA" => self.execute_sta(addressing_mode),
-            "STX" => self.execute_stx(addressing_mode),
-            "STY" => self.execute_sty(addressing_mode),
+            "STA" => self.execute_sta(&addressing_mode),
+            "STX" => self.execute_stx(&addressing_mode),
+            "STY" => self.execute_sty(&addressing_mode),
             "TAX" => self.execute_tax(),
             "TAY" => self.execute_tay(),
             "TSX" => self.execute_tsx(),
@@ -1066,27 +1067,56 @@ impl Cpu {
 
 impl Memory for Cpu {
     fn read(&self, address: u16) -> u8 {
-        self.bus
-            .borrow_mut()
-            .get_cpu_memory_map()
-            .read(address)
+        match address {
+            0x0000..=0x1FFF => {
+                self.bus
+                    .borrow_mut()
+                    .get_memory_map(MemoryMapType::Cpu)
+                    .read(address & 0x7FF)
+            },
+            0x2000..=0x3FFF => todo!("PPU registers"),
+            0x4000..=0x4017 => todo!("PPU OAM DMA, APU"),
+            0x4018..=0x401F => panic!("APU and I/O func. test is normally disabled!"),
+            0x4020..=0xFFFF => {
+                self.bus
+                    .borrow_mut()
+                    .get_memory_map(MemoryMapType::Cpu)
+                    .read(address)
+            },
+        }
     }
 
     fn write(&mut self, address: u16, data: u8) {
-        self.bus
-            .borrow_mut()
-            .get_cpu_memory_map()
-            .write(address, data);
+        match address {
+            0x0000..=0x1FFF => {
+                self.bus
+                    .borrow_mut()
+                    .get_memory_map(MemoryMapType::Cpu)
+                    .write(address & 0x7FF, data);
+            },
+            0x2000..=0x3FFF => todo!("PPU registers"),
+            0x4000..=0x4017 => todo!("PPU OAM DMA, APU"),
+            0x4018..=0x401F => panic!("APU and I/O func. test is normally disabled!"),
+            0x4020..=0xFFFF => {
+                self.bus
+                    .borrow_mut()
+                    .get_memory_map(MemoryMapType::Cpu)
+                    .write(address, data);
+            },
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::core::cartridge::Cartridge;
+
     use super::*;
 
     #[test]
     fn test_adc_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+        let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 127;
@@ -1095,7 +1125,7 @@ mod tests {
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
 
-        cpu.execute_adc(AddressingMode::Immediate);
+        cpu.execute_adc(&AddressingMode::Immediate);
         assert_eq!(cpu.register_a, 254, "Register A should be 254!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "CPU Status: Carry should be unset!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative flag should be set!");
@@ -1107,7 +1137,7 @@ mod tests {
         cpu.write(0x0001, 0x80);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
 
-        cpu.execute_adc(AddressingMode::Immediate);
+        cpu.execute_adc(&AddressingMode::Immediate);
         assert_eq!(cpu.register_a, 1, "Register A should be 1!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "CPU Status: Carry should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative flag should be unset!");
@@ -1117,7 +1147,8 @@ mod tests {
 
     #[test]
     fn test_and_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 127;
@@ -1125,7 +1156,7 @@ mod tests {
         cpu.write(0x0001, 0x7E);
         cpu.program_counter = 0x0001;
 
-        cpu.execute_and(AddressingMode::Immediate);
+        cpu.execute_and(&AddressingMode::Immediate);
         assert_eq!(cpu.register_a, 0x7E, "Register A should be 126!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative flag should be unset!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "CPU Status: Zero should be unset!");
@@ -1133,11 +1164,12 @@ mod tests {
 
     #[test]
     fn test_asl_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 0x80;
-        cpu.execute_asl(AddressingMode::Accumulator);
+        cpu.execute_asl(&AddressingMode::Accumulator);
 
         assert_eq!(cpu.register_a, 0x00, "Register A should be 0!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative flag should be unset!");
@@ -1147,7 +1179,8 @@ mod tests {
 
     #[test]
     fn test_bcc_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1165,7 +1198,8 @@ mod tests {
 
     #[test]
     fn test_bcs_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1183,7 +1217,8 @@ mod tests {
 
     #[test]
     fn test_beq_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1201,7 +1236,8 @@ mod tests {
 
     #[test]
     fn test_bit_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1212,29 +1248,30 @@ mod tests {
         // 0x0001 - lobyte of 0x0000, 0x0002 - hibyte of 0x0000
         cpu.write(0x0001, 0x00);
         cpu.write(0x0002, 0x00);
-        cpu.execute_bit(AddressingMode::Absolute);
+        cpu.execute_bit(&AddressingMode::Absolute);
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative should be set!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Overflow), "CPU Status: Overflow should be set!");
 
         cpu.write(0x0000, 0x80);
-        cpu.execute_bit(AddressingMode::Absolute);
+        cpu.execute_bit(&AddressingMode::Absolute);
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Overflow), "CPU Status: Overflow should be unset!");
 
         cpu.write(0x0000, 0x40);
-        cpu.execute_bit(AddressingMode::Absolute);
+        cpu.execute_bit(&AddressingMode::Absolute);
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative should be set!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Overflow), "CPU Status: Overflow should be unset!");
 
         cpu.write(0x0000, 0x3F);
-        cpu.execute_bit(AddressingMode::Absolute);
+        cpu.execute_bit(&AddressingMode::Absolute);
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative should be unset!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Overflow), "CPU Status: Overflow should be unset!");
     }
 
     #[test]
     fn test_bmi_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1252,7 +1289,8 @@ mod tests {
 
     #[test]
     fn test_bne_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1270,7 +1308,8 @@ mod tests {
 
     #[test]
     fn test_bpl_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1288,7 +1327,8 @@ mod tests {
 
     #[test]
     fn test_bvc_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1306,7 +1346,8 @@ mod tests {
 
     #[test]
     fn test_bvs_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1324,7 +1365,8 @@ mod tests {
 
     #[test] 
     fn test_clc_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
@@ -1335,7 +1377,8 @@ mod tests {
 
     #[test]
     fn test_cld_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, true);
@@ -1346,7 +1389,8 @@ mod tests {
 
     #[test]
     fn test_cli_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
@@ -1357,7 +1401,8 @@ mod tests {
 
     #[test]
     fn test_clv_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Overflow, true);
@@ -1368,13 +1413,14 @@ mod tests {
 
     #[test]
     fn test_cmp_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 100;
         cpu.write(0x0000, 99);
         cpu.program_counter = 0x0000;
-        cpu.execute_cmp(AddressingMode::Immediate);
+        cpu.execute_cmp(&AddressingMode::Immediate);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1382,7 +1428,7 @@ mod tests {
 
         cpu.register_a = 98;
         cpu.program_counter = 0x0000;
-        cpu.execute_cmp(AddressingMode::Immediate);
+        cpu.execute_cmp(&AddressingMode::Immediate);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1390,7 +1436,7 @@ mod tests {
 
         cpu.register_a = 99;
         cpu.program_counter = 0x0000;
-        cpu.execute_cmp(AddressingMode::Immediate);
+        cpu.execute_cmp(&AddressingMode::Immediate);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1399,13 +1445,14 @@ mod tests {
 
     #[test]
     fn test_cpx_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 100;
         cpu.write(0x0000, 99);
         cpu.program_counter = 0x0000;
-        cpu.execute_cpx(AddressingMode::Immediate);
+        cpu.execute_cpx(&AddressingMode::Immediate);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1413,7 +1460,7 @@ mod tests {
 
         cpu.register_x = 98;
         cpu.program_counter = 0x0000;
-        cpu.execute_cpx(AddressingMode::Immediate);
+        cpu.execute_cpx(&AddressingMode::Immediate);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1421,7 +1468,7 @@ mod tests {
 
         cpu.register_x = 99;
         cpu.program_counter = 0x0000;
-        cpu.execute_cpx(AddressingMode::Immediate);
+        cpu.execute_cpx(&AddressingMode::Immediate);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1430,13 +1477,14 @@ mod tests {
 
     #[test]
     fn test_cpy_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 100;
         cpu.write(0x0000, 99);
         cpu.program_counter = 0x0000;
-        cpu.execute_cpy(AddressingMode::Immediate);
+        cpu.execute_cpy(&AddressingMode::Immediate);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1444,7 +1492,7 @@ mod tests {
 
         cpu.register_y = 98;
         cpu.program_counter = 0x0000;
-        cpu.execute_cpy(AddressingMode::Immediate);
+        cpu.execute_cpy(&AddressingMode::Immediate);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1452,7 +1500,7 @@ mod tests {
 
         cpu.register_y = 99;
         cpu.program_counter = 0x0000;
-        cpu.execute_cpy(AddressingMode::Immediate);
+        cpu.execute_cpy(&AddressingMode::Immediate);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set, A >= M!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset, A - M == 1!");
@@ -1461,13 +1509,14 @@ mod tests {
 
     #[test]
     fn test_dec_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.write(0x0001, 129);
         cpu.write(0x0002, 0x1);
         cpu.program_counter = 0x0002;
-        cpu.execute_dec(AddressingMode::ZeroPageX);
+        cpu.execute_dec(&AddressingMode::ZeroPageX);
 
         let memory_value = cpu.read(0x0001);
         assert_eq!(memory_value, 128, "Memory value at 0x0001 should be 128!");
@@ -1477,7 +1526,8 @@ mod tests {
 
     #[test]
     fn test_dex_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
@@ -1490,7 +1540,8 @@ mod tests {
 
     #[test]
     fn test_dey_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 128;
@@ -1503,13 +1554,14 @@ mod tests {
 
     #[test]
     fn test_eor_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 12;
         cpu.write(0x0000, 37);
         cpu.program_counter = 0x0000;
-        cpu.execute_eor(AddressingMode::Immediate);
+        cpu.execute_eor(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_a, 41, "Register A should contain result of 12 ^ 37!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset!");
@@ -1518,13 +1570,14 @@ mod tests {
 
     #[test]
     fn test_inc_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.write(0x0001, 129);
         cpu.write(0x0002, 0x1);
         cpu.program_counter = 0x0002;
-        cpu.execute_inc(AddressingMode::ZeroPageX);
+        cpu.execute_inc(&AddressingMode::ZeroPageX);
 
         let memory_value = cpu.read(0x0001);
         assert_eq!(memory_value, 130, "Memory value at 0x0001 should be 130!");
@@ -1534,7 +1587,8 @@ mod tests {
 
     #[test]
     fn test_inx_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
@@ -1547,7 +1601,8 @@ mod tests {
 
     #[test]
     fn test_iny_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1561,28 +1616,30 @@ mod tests {
 
     #[test]
     fn test_jmp_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xFF);
         cpu.write(0x0001, 0xAA);
-        cpu.execute_jmp(AddressingMode::Absolute);
+        cpu.execute_jmp(&AddressingMode::Absolute);
 
         assert_eq!(cpu.program_counter, 0xAAFF, "Program counter should be 0xAAFF!");
     }
 
     #[test]
     fn test_jsr_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
-        cpu.program_counter = 0xDEAD;
-        cpu.write(0xDEAD, 0xFF);
-        cpu.write(0xDEAE, 0xAA);
+        cpu.program_counter = 0x0400;
+        cpu.write(0x0400, 0xFF);
+        cpu.write(0x0401, 0xAA);
         cpu.execute_jsr();
 
         assert_eq!(cpu.program_counter, 0xAAFF, "Program counter should be 0xAAFF");
@@ -1590,26 +1647,27 @@ mod tests {
 
         let lo = cpu.read(0x0100 + cpu.stack_pointer.wrapping_add(1) as u16);
         let hi = cpu.read(0x0100 + cpu.stack_pointer.wrapping_add(2) as u16);
-        assert_eq!(lo, 0xAF, "Invalid lobyte of PC in Stack!");
-        assert_eq!(hi, 0xDE, "Invalid hibyte of PC in Stack!");
+        assert_eq!(lo, 0x02, "Invalid lobyte of PC in Stack!");
+        assert_eq!(hi, 0x04, "Invalid hibyte of PC in Stack!");
     }
 
     #[test]
     fn test_lda_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xAA);
-        cpu.execute_lda(AddressingMode::Immediate);
+        cpu.execute_lda(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_a, 0xAA, "Register A should be 0xAA!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.write(0x0000, 0x00);
-        cpu.execute_lda(AddressingMode::Immediate);
+        cpu.execute_lda(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_a, 0x00, "Register A should be 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
@@ -1618,20 +1676,21 @@ mod tests {
 
     #[test]
     fn test_ldx_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xAA);
-        cpu.execute_ldx(AddressingMode::Immediate);
+        cpu.execute_ldx(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_x, 0xAA, "Register A should be 0xAA!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.write(0x0000, 0x00);
-        cpu.execute_ldx(AddressingMode::Immediate);
+        cpu.execute_ldx(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_x, 0x00, "Register A should be 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
@@ -1640,20 +1699,21 @@ mod tests {
 
     #[test]
     fn test_ldy_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xAA);
-        cpu.execute_ldy(AddressingMode::Immediate);
+        cpu.execute_ldy(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_y, 0xAA, "Register A should be 0xAA!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.write(0x0000, 0x00);
-        cpu.execute_ldy(AddressingMode::Immediate);
+        cpu.execute_ldy(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_y, 0x00, "Register A should be 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
@@ -1662,12 +1722,13 @@ mod tests {
 
     #[test]
     fn test_lsr_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x81;
-        cpu.execute_lsr(AddressingMode::Accumulator);
+        cpu.execute_lsr(&AddressingMode::Accumulator);
 
         assert_eq!(cpu.register_a, 0x40, "Register A should be 0x40!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "CPU Status: Negative flag should be unset!");
@@ -1677,14 +1738,15 @@ mod tests {
 
     #[test]
     fn test_ora_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x81;
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0xFF);
-        cpu.execute_ora(AddressingMode::Immediate);
+        cpu.execute_ora(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_a, 0xFF, "Register A should be 0xFF!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset!");
@@ -1693,7 +1755,8 @@ mod tests {
 
     #[test]
     fn test_pha_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1708,7 +1771,8 @@ mod tests {
 
     #[test]
     fn test_php_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1723,7 +1787,8 @@ mod tests {
 
     #[test]
     fn test_pla_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1746,7 +1811,8 @@ mod tests {
 
     #[test]
     fn test_plp_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1759,13 +1825,14 @@ mod tests {
 
     #[test]
     fn test_rol_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
         cpu.write(0x0000, 0xAA);
-        cpu.execute_rol(AddressingMode::ZeroPage);
+        cpu.execute_rol(&AddressingMode::ZeroPage);
 
         let zeropage_value = cpu.read(0x0000);
         assert_eq!(zeropage_value, 0xAAu8.rotate_left(1), "Invalid value in ZeroPage!");
@@ -1774,7 +1841,7 @@ mod tests {
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
 
         cpu.register_a = 0xAA;
-        cpu.execute_rol(AddressingMode::Accumulator);
+        cpu.execute_rol(&AddressingMode::Accumulator);
 
         assert_eq!(cpu.register_a, 0xAAu8.rotate_left(1), "Invalid value in Register A!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set!");
@@ -1784,13 +1851,14 @@ mod tests {
 
     #[test]
     fn test_ror_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
         cpu.write(0x0000, 0xAA);
-        cpu.execute_ror(AddressingMode::ZeroPage);
+        cpu.execute_ror(&AddressingMode::ZeroPage);
 
         let zeropage_value = cpu.read(0x0000);
         assert_eq!(zeropage_value, 0xAAu8.rotate_left(1), "Invalid value in ZeroPage!");
@@ -1799,7 +1867,7 @@ mod tests {
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
 
         cpu.register_a = 0xAA;
-        cpu.execute_ror(AddressingMode::Accumulator);
+        cpu.execute_ror(&AddressingMode::Accumulator);
 
         assert_eq!(cpu.register_a, 0xAAu8.rotate_left(1), "Invalid value in Register A!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set!");
@@ -1809,7 +1877,8 @@ mod tests {
 
     #[test]
     fn test_rti_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1825,7 +1894,8 @@ mod tests {
 
     #[test]
     fn test_rts_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1839,7 +1909,8 @@ mod tests {
 
     #[test]
     fn test_sbc_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1847,7 +1918,7 @@ mod tests {
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0x80);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
-        cpu.execute_sbc(AddressingMode::Immediate);
+        cpu.execute_sbc(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_a, 0x80, "Register A should have 0x80!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set!");
@@ -1859,7 +1930,7 @@ mod tests {
         cpu.program_counter = 0x0000;
         cpu.write(0x0000, 0x01);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
-        cpu.execute_sbc(AddressingMode::Immediate);
+        cpu.execute_sbc(&AddressingMode::Immediate);
 
         assert_eq!(cpu.register_a, 0x7E, "Register A should have 0x80!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set!");
@@ -1870,7 +1941,8 @@ mod tests {
 
     #[test]
     fn test_sec_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1882,7 +1954,8 @@ mod tests {
 
     #[test]
     fn test_sed_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1894,7 +1967,8 @@ mod tests {
 
     #[test]
     fn test_sei_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1906,14 +1980,15 @@ mod tests {
 
     #[test]
     fn test_sta_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
         cpu.write(0x0001, 0x00);
         cpu.program_counter = 0x0001;
-        cpu.execute_sta(AddressingMode::ZeroPage);
+        cpu.execute_sta(&AddressingMode::ZeroPage);
 
         let result = cpu.read(0x0000);
         assert_eq!(result, 0xFF, "Zero page value should have 0xFF!");
@@ -1921,14 +1996,15 @@ mod tests {
 
     #[test]
     fn test_stx_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xFF;
         cpu.write(0x0001, 0x00);
         cpu.program_counter = 0x0001;
-        cpu.execute_stx(AddressingMode::ZeroPage);
+        cpu.execute_stx(&AddressingMode::ZeroPage);
 
         let result = cpu.read(0x0000);
         assert_eq!(result, 0xFF, "Zero page value should have 0xFF!");
@@ -1936,14 +2012,15 @@ mod tests {
 
     #[test]
     fn test_sty_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 0xFF;
         cpu.write(0x0001, 0x00);
         cpu.program_counter = 0x0001;
-        cpu.execute_sty(AddressingMode::ZeroPage);
+        cpu.execute_sty(&AddressingMode::ZeroPage);
 
         let result = cpu.read(0x0000);
         assert_eq!(result, 0xFF, "Zero page value should have 0xFF!");
@@ -1951,7 +2028,8 @@ mod tests {
 
     #[test]
     fn test_tax_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1971,7 +2049,8 @@ mod tests {
 
     #[test]
     fn test_tay_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -1991,7 +2070,8 @@ mod tests {
 
     #[test]
     fn test_tsx_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -2011,7 +2091,8 @@ mod tests {
 
     #[test]
     fn test_txa_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -2031,7 +2112,8 @@ mod tests {
 
     #[test]
     fn test_txs_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 
@@ -2043,7 +2125,8 @@ mod tests {
 
     #[test]
     fn test_tya_instruction() {
-        let bus = Rc::new(RefCell::new(Bus::new()));
+        let cartridge = Cartridge::empty();
+		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
 		let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
 

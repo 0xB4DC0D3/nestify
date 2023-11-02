@@ -1,26 +1,29 @@
+use super::cartridge::Cartridge;
 use super::memorymap::MemoryMap;
+use super::memorymap::CpuMemoryMap;
+use super::memorymap::PpuMemoryMap;
+use super::memorymap::MemoryMapType;
 
 pub struct Bus {
-    cpu_memory_map: MemoryMap<0x10000>,
-    ppu_memory_map: MemoryMap<0x4000>,
+    cpu_memory_map: Box<dyn MemoryMap>,
+    ppu_memory_map: Box<dyn MemoryMap>,
     nmi_interrupt: Option<()>,
 }
 
 impl Bus {
-    pub fn new() -> Self {
+    pub fn new(cartridge: &Cartridge) -> Self {
         Self {
-            cpu_memory_map: MemoryMap::new(),
-            ppu_memory_map: MemoryMap::new(),
+            cpu_memory_map: Box::new(CpuMemoryMap::new(cartridge.get_mapper())),
+            ppu_memory_map: Box::new(PpuMemoryMap::new()),
             nmi_interrupt: None,
         }
     }
 
-    pub fn get_cpu_memory_map(&mut self) -> &mut MemoryMap<0x10000> {
-        &mut self.cpu_memory_map
-    }
-
-    pub fn get_ppu_memory_map(&mut self) -> &mut MemoryMap<0x4000> {
-        &mut self.ppu_memory_map
+    pub fn get_memory_map(&mut self, memory_map_type: MemoryMapType) -> &mut Box<dyn MemoryMap> {
+        match memory_map_type {
+            MemoryMapType::Cpu => &mut self.cpu_memory_map,
+            MemoryMapType::Ppu => &mut self.ppu_memory_map,
+        }
     }
 
     pub fn set_interrupt(&mut self, interrupt: Option<()>) {
