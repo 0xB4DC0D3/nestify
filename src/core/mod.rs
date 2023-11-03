@@ -1,8 +1,8 @@
 mod memory;
 mod registers;
 mod memorymap;
-mod cpu;
-mod bus;
-mod clock;
-mod cartridge;
-pub mod mappers;
+pub mod cpu;
+pub mod bus;
+pub mod clock;
+pub mod cartridge;
+mod mappers;

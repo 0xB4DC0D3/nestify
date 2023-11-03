@@ -319,6 +319,7 @@ pub struct Cpu {
     internal_state: Option<InternalState>,
     bus: Rc<RefCell<Bus>>,
     clock: Rc<RefCell<Clock>>,
+    use_disassembler: bool,
 }
 
 impl Cpu {
@@ -333,6 +334,15 @@ impl Cpu {
             internal_state: None,
             bus: bus.clone(),
             clock: clock.clone(),
+            use_disassembler: false,
+        }
+    }
+
+    pub fn use_disassembler(&mut self, active: bool) {
+        if active {
+            self.use_disassembler = true;
+        } else {
+            self.use_disassembler = false;
         }
     }
 
@@ -375,20 +385,40 @@ impl Cpu {
     }
 
     pub fn get_memory_data(&self, addressing_mode: &AddressingMode) -> Option<(u16, bool)> {
-        match addressing_mode {
-            &AddressingMode::Implicit => {
+        let mut instruction_info = String::new();
+        let result = match addressing_mode {
+            AddressingMode::Implicit => {
                 None
             },
-            &AddressingMode::Accumulator => {
+            AddressingMode::Accumulator => {
+                if self.use_disassembler {
+                    instruction_info = "A".into();
+                }
+
                 None
             },
-            &AddressingMode::Immediate => {
-                Some((self.program_counter, false))
+            AddressingMode::Immediate => {
+                let memory_pointer = self.program_counter;
+
+                if self.use_disassembler {
+                    instruction_info = format!("#${:02X}", self.read(memory_pointer));
+                }
+
+                Some((memory_pointer, false))
             },
-            &AddressingMode::ZeroPage => {
-                Some((self.read(self.program_counter) as u16, false))
+            AddressingMode::ZeroPage => {
+                let memory_pointer = self.read(self.program_counter) as u16;
+
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "${:02X} = {:02X}",
+                        memory_pointer, self.read(memory_pointer)
+                    );
+                }
+
+                Some((memory_pointer, false))
             },
-            &AddressingMode::ZeroPageX => {
+            AddressingMode::ZeroPageX => {
                 let pointer = self
                     .read(self.program_counter);
 
@@ -397,9 +427,16 @@ impl Cpu {
 
                 let is_page_cross = self.is_page_cross(pointer as u16, memory_pointer as u16);
 
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "${:02X},X @ {:02X} = {:02X}",
+                        pointer, memory_pointer, self.read(memory_pointer as u16)
+                    );
+                }
+
                 Some((memory_pointer as u16, is_page_cross))
             },
-            &AddressingMode::ZeroPageY => {
+            AddressingMode::ZeroPageY => {
                 let pointer = self
                     .read(self.program_counter);
 
@@ -408,15 +445,60 @@ impl Cpu {
 
                 let is_page_cross = self.is_page_cross(pointer as u16, memory_pointer as u16);
 
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "${:02X},Y @ {:02X} = {:02X}",
+                        pointer, memory_pointer, self.read(memory_pointer as u16)
+                    );
+                }
+
                 Some((memory_pointer as u16, is_page_cross))
             },
-            &AddressingMode::Relative => {
-                Some((self.read(self.program_counter) as u16, false))
+            AddressingMode::Relative => {
+                let offset = self.read(self.program_counter) as u16;
+
+                if self.use_disassembler {
+                    let jump_offset = offset as i8;
+                    instruction_info = format!(
+                        "${:04X}", 
+                        (self.program_counter.wrapping_add(1) as i16)
+                            .wrapping_add(jump_offset as i16) as u16
+                    );
+                }
+
+                Some((offset, false))
             },
-            &AddressingMode::Absolute => {
+            AddressingMode::Absolute => {
+                let memory_pointer = self.read_u16(self.program_counter);
+
+                if self.use_disassembler {
+                    let value = if let 0x2000..=0x3FFF = memory_pointer {
+                        0x00
+                    } else {
+                        self.read(memory_pointer)
+                    };
+
+                    let current_instruction = &self.internal_state
+                        .as_ref()
+                        .unwrap()
+                        .current_instruction;
+
+                    if let "JSR" | "JMP" = current_instruction.as_str() {
+                        instruction_info = format!(
+                            "${:04X}",
+                            memory_pointer
+                        );
+                    } else {
+                        instruction_info = format!(
+                            "${:04X} = {:02X}",
+                            memory_pointer, value
+                        );
+                    }
+                }
+
                 Some((self.read_u16(self.program_counter), false))
             },
-            &AddressingMode::AbsoluteX => {
+            AddressingMode::AbsoluteX => {
                 let pointer = self
                     .read_u16(self.program_counter);
 
@@ -425,9 +507,16 @@ impl Cpu {
 
                 let is_page_cross = self.is_page_cross(pointer, memory_pointer);
 
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "${:04X},X @ {:04X} = {:02X}",
+                        pointer, memory_pointer, self.read(memory_pointer)
+                    );
+                }
+
                 Some((memory_pointer, is_page_cross))
             },
-            &AddressingMode::AbsoluteY => {
+            AddressingMode::AbsoluteY => {
                 let pointer = self
                     .read_u16(self.program_counter);
 
@@ -436,42 +525,111 @@ impl Cpu {
 
                 let is_page_cross = self.is_page_cross(pointer, memory_pointer);
 
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "${:04X},Y @ {:04X} = {:02X}",
+                        pointer, memory_pointer, self.read(memory_pointer)
+                    );
+                }
+
                 Some((memory_pointer, is_page_cross))
             },
-            &AddressingMode::Indirect => {
+            AddressingMode::Indirect => {
                 let pointer = self.read_u16(self.program_counter);
-                let memory_pointer = self.read_u16(pointer);
+
+                // Indirect addressing modes do not handle page boundary crossing at all.
+                // When the parameter's low byte is $FF, the effective address wraps
+                // around and the CPU fetches high byte from $xx00 instead of $xx00+$0100.
+                // E.g. JMP ($01FF) fetches PCL from $01FF and PCH from $0100,
+                // and LDA ($FF),Y fetches the base address from $FF and $00.
+                // 0x02FF, 0x0200
+                let [lo, hi] = pointer.to_le_bytes();
+                let hibyte_pointer = u16::from_le_bytes([lo.wrapping_add(1), hi]);
+                let memory_pointer = u16::from_le_bytes([
+                    self.read(pointer),
+                    self.read(hibyte_pointer),
+                ]);
+
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "(${:04X}) = {:04X}",
+                        pointer, memory_pointer
+                    );
+                }
 
                 Some((memory_pointer, false))
             },
-            &AddressingMode::IndexedIndirect => {
+            AddressingMode::IndexedIndirect => {
                 let pointer = self
                     .read(self.program_counter)
-                    .wrapping_add(self.register_x) as u16;
+                    .wrapping_add(self.register_x) as u16 & 0xFF;
 
-                let memory_pointer = self.read_u16(pointer);
+                let lo = self.read(pointer);
+                let hi = self.read(pointer.wrapping_add(1) & 0xFF);
+                let memory_pointer = u16::from_le_bytes([lo, hi]);
+
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "(${:02X},X) @ {:02X} = {:04X} = {:02X}",
+                        pointer.wrapping_sub(self.register_x as u16), pointer, memory_pointer, self.read(memory_pointer)
+                    );
+                }
 
                 Some((memory_pointer, false))
             },
-            &AddressingMode::IndirectIndexed => {
+            AddressingMode::IndirectIndexed => {
                 let pointer = self
                     .read(self.program_counter) as u16;
 
-                let deref_pointer = self
-                    .read_u16(pointer);
+                let lo = self.read(pointer);
+                let hi = self.read(pointer.wrapping_add(1) & 0xFF);
+                let deref_pointer = u16::from_le_bytes([lo, hi]);
 
                 let memory_pointer = deref_pointer
                     .wrapping_add(self.register_y as u16);
 
                 let is_page_cross = self.is_page_cross(deref_pointer, memory_pointer as u16);
 
+                if self.use_disassembler {
+                    instruction_info = format!(
+                        "(${:02X}),Y = {:04X} @ {:04X} = {:02X}",
+                        pointer, deref_pointer, memory_pointer, self.read(memory_pointer)
+                    );
+                }
+
                 Some((memory_pointer, is_page_cross))
             },
+        };
+        
+        if self.use_disassembler {
+            let InternalState { 
+                current_instruction, 
+                args_length
+            } = self.internal_state.as_ref().unwrap();
+
+            let hexdump = (0..*args_length + 1).into_iter()
+                .map(|offset| {
+                    format!("{:02X}", self.read(self.program_counter.wrapping_sub(1).wrapping_add(offset as u16)))
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            println!(
+                "{:<47} A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
+                format!("{:04X}  {:<9} {} {}", self.program_counter.wrapping_sub(1), hexdump, current_instruction, instruction_info),
+                self.register_a, self.register_x, self.register_y, self.status.get(), self.stack_pointer
+            );
         }
+
+        result
+    }
+
+    pub fn set_program_counter(&mut self, address: u16) {
+        self.program_counter = address;
     }
 
     fn execute_adc(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for ADC instruction!");
 
         let a = self.register_a as u16;
@@ -492,7 +650,7 @@ impl Cpu {
     }
 
     fn execute_and(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for AND instruction!");
 
         let result = self.register_a & self.read(memory_pointer);
@@ -507,14 +665,14 @@ impl Cpu {
     }
 
     fn execute_asl(&mut self, addressing_mode: &AddressingMode) {
-        let memory_data = self.get_memory_data(&addressing_mode);
+        let memory_data = self.get_memory_data(addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
             self.register_a
         };
 
-        let result = value << 2;
+        let result = value << 1;
 
         self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x80 == 0x80);
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
@@ -528,23 +686,21 @@ impl Cpu {
     }
 
     fn branch(&mut self, flag_active: bool) {
+        let (memory_pointer, _) = self.get_memory_data(&AddressingMode::Relative)
+            .expect("Invalid Addressing mode for branch instructions!");
+
         if flag_active {
             self.clock.borrow_mut().tick(1);
 
-            let (memory_pointer, _) = self.get_memory_data(&&AddressingMode::Relative)
-                .expect("Invalid Addressing mode for branch instructions!");
-
-            let offset = memory_pointer as i16;
+            let offset = memory_pointer as i8;
             let next_pc = self.program_counter.wrapping_add(1);
-            let jump_pc = (next_pc as i16).wrapping_add(offset) as u16;
+            let jump_pc = (next_pc as i16).wrapping_add(offset as i16) as u16;
 
             if self.is_page_cross(next_pc, jump_pc) {
                 self.clock.borrow_mut().tick(1);
             }
 
             self.program_counter = jump_pc;
-        } else {
-            self.program_counter = self.program_counter.wrapping_add(1);
         }
     }
 
@@ -561,7 +717,7 @@ impl Cpu {
     }
 
     fn execute_bit(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for BIT instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -584,7 +740,8 @@ impl Cpu {
         self.branch(!self.status.get_flag(CpuStatusRegisterFlags::Negative));
     }
 
-    fn execute_brk(&mut self) {
+    fn execute_brk(&self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         // Do nothing
     }
 
@@ -596,24 +753,28 @@ impl Cpu {
         self.branch(self.status.get_flag(CpuStatusRegisterFlags::Overflow));
     }
 
-    fn execute_clc(&mut self) {
+    fn execute_clc(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Carry, false);
     }
 
-    fn execute_cld(&mut self) {
+    fn execute_cld(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::DecimalMode, false);
     }
 
-    fn execute_cli(&mut self) {
+    fn execute_cli(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, false);
     }
 
-    fn execute_clv(&mut self) {
+    fn execute_clv(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Overflow, false);
     }
 
     fn compare(&mut self, addressing_mode: &AddressingMode, register_value: u8) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for CMP/CPX/CPY instructions!");
 
         let memory_value = self.read(memory_pointer);
@@ -629,19 +790,19 @@ impl Cpu {
     }
 
     fn execute_cmp(&mut self, addressing_mode: &AddressingMode) {
-        self.compare(&addressing_mode, self.register_a);
+        self.compare(addressing_mode, self.register_a);
     }
 
     fn execute_cpx(&mut self, addressing_mode: &AddressingMode) {
-        self.compare(&addressing_mode, self.register_x);
+        self.compare(addressing_mode, self.register_x);
     }
 
     fn execute_cpy(&mut self, addressing_mode: &AddressingMode) {
-        self.compare(&addressing_mode, self.register_y);
+        self.compare(addressing_mode, self.register_y);
     }
 
     fn execute_dec(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for DEC instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -652,7 +813,9 @@ impl Cpu {
         self.write(memory_pointer, result);
     }
 
-    fn execute_dex(&mut self) {
+    fn execute_dex(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let result = self.register_x.wrapping_sub(1);
 
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
@@ -660,7 +823,9 @@ impl Cpu {
         self.register_x = result;
     }
 
-    fn execute_dey(&mut self) {
+    fn execute_dey(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let result = self.register_y.wrapping_sub(1);
 
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
@@ -669,7 +834,7 @@ impl Cpu {
     }
 
     fn execute_eor(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for EOR instruction!");
 
         let result = self.register_a ^ self.read(memory_pointer);
@@ -684,7 +849,7 @@ impl Cpu {
     }
 
     fn execute_inc(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for INC instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -695,7 +860,9 @@ impl Cpu {
         self.write(memory_pointer, result);
     }
 
-    fn execute_inx(&mut self) {
+    fn execute_inx(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let result = self.register_x.wrapping_add(1);
 
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
@@ -703,7 +870,9 @@ impl Cpu {
         self.register_x = result;
     }
 
-    fn execute_iny(&mut self) {
+    fn execute_iny(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let result = self.register_y.wrapping_add(1);
 
         self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
@@ -712,21 +881,21 @@ impl Cpu {
     }
 
     fn execute_jmp(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for JMP instruction!");
 
         self.program_counter = memory_pointer;
     }
 
     fn execute_jsr(&mut self) {
-        let (memory_pointer, _) = self.get_memory_data(&&AddressingMode::Absolute).unwrap();
+        let (memory_pointer, _) = self.get_memory_data(&AddressingMode::Absolute).unwrap();
 
-        self.push_stack_u16(self.program_counter.wrapping_add(2));
+        self.push_stack_u16(self.program_counter.wrapping_add(1));
         self.program_counter = memory_pointer;
     }
 
     fn execute_lda(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for LDA instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -741,7 +910,7 @@ impl Cpu {
     }
 
     fn execute_ldx(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for LDA instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -756,7 +925,7 @@ impl Cpu {
     }
 
     fn execute_ldy(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for LDA instruction!");
 
         let memory_value = self.read(memory_pointer);
@@ -771,7 +940,7 @@ impl Cpu {
     }
 
     fn execute_lsr(&mut self, addressing_mode: &AddressingMode) {
-        let memory_data = self.get_memory_data(&addressing_mode);
+        let memory_data = self.get_memory_data(addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
@@ -791,12 +960,13 @@ impl Cpu {
         }
     }
 
-    fn execute_nop(&self) {
+    fn execute_nop(&self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         // Do nothing
     }
 
     fn execute_ora(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for ORA instruction!");
         
         let result = self.register_a | self.read(memory_pointer);
@@ -810,15 +980,21 @@ impl Cpu {
         }
     }
 
-    fn execute_pha(&mut self) {
+    fn execute_pha(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.push_stack(self.register_a);
     }
 
-    fn execute_php(&mut self) {
-        self.push_stack(self.status.get());
+    fn execute_php(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
+        // PHP always pushes the Break (B) flag as a `1' to the stack.
+        self.push_stack(self.status.get() | CpuStatusRegisterFlags::Break as u8);
     }
 
-    fn execute_pla(&mut self) {
+    fn execute_pla(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let value_from_stack = self.pop_stack();
 
         self.status.set_flag(CpuStatusRegisterFlags::Zero, value_from_stack == 0);
@@ -826,21 +1002,35 @@ impl Cpu {
         self.register_a = value_from_stack;
     }
 
-    fn execute_plp(&mut self) {
+    fn execute_plp(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let status = self.pop_stack();
 
+        // If PHP always pushes the Break (B) flag as `1', then we should
+        // restore Break (B) flag, when we're pulling out Status register.
+        // Also we should set Unused flag (nestest.log have this flag set
+        // after PLP)!
+
         self.status.set(status);
+        self.status.set_flag(CpuStatusRegisterFlags::Break, false);
+        self.status.set_flag(CpuStatusRegisterFlags::Unused, true);
     }
 
     fn execute_rol(&mut self, addressing_mode: &AddressingMode) {
-        let memory_data = self.get_memory_data(&addressing_mode);
+        let memory_data = self.get_memory_data(addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
             self.register_a
         };
 
-        let result = value.rotate_left(1);
+        let carry_flag = self.status.get_flag(CpuStatusRegisterFlags::Carry);
+        let result = if carry_flag {
+            value.rotate_left(1) | 0x1
+        } else {
+            value.rotate_left(1) & !0x1
+        };
 
         self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x80 == 0x80);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
@@ -854,14 +1044,19 @@ impl Cpu {
     }
 
     fn execute_ror(&mut self, addressing_mode: &AddressingMode) {
-        let memory_data = self.get_memory_data(&addressing_mode);
+        let memory_data = self.get_memory_data(addressing_mode);
         let value = if let Some((memory_pointer, _)) = memory_data {
             self.read(memory_pointer)
         } else {
             self.register_a
         };
 
-        let result = value.rotate_right(1);
+        let carry_flag = self.status.get_flag(CpuStatusRegisterFlags::Carry);
+        let result = if carry_flag {
+            value.rotate_right(1) | 0x80
+        } else {
+            value.rotate_right(1) & !0x80
+        };
 
         self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x1 == 0x1);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
@@ -874,20 +1069,24 @@ impl Cpu {
         }
     }
 
-    fn execute_rti(&mut self) {
+    fn execute_rti(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+
         let status = self.pop_stack();
         let program_counter = self.pop_stack_u16();
 
         self.status.set(status);
+        self.status.set_flag(CpuStatusRegisterFlags::Unused, true);
         self.program_counter = program_counter;
     }
 
-    fn execute_rts(&mut self) {
-        self.program_counter = self.pop_stack_u16();
+    fn execute_rts(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
+        self.program_counter = self.pop_stack_u16().wrapping_add(1);
     }
 
     fn execute_sbc(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, additional_cycle) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, additional_cycle) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for ADC instruction!");
 
         let a = self.register_a as u16;
@@ -907,71 +1106,246 @@ impl Cpu {
         }
     }
 
-    fn execute_sec(&mut self) {
+    fn execute_sec(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Carry, true);
     }
 
-    fn execute_sed(&mut self) {
+    fn execute_sed(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::DecimalMode, true);
     }
 
-    fn execute_sei(&mut self) {
+    fn execute_sei(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
     }
 
     fn execute_sta(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for STA instruction!");
 
         self.write(memory_pointer, self.register_a);
     }
 
     fn execute_stx(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for STA instruction!");
 
         self.write(memory_pointer, self.register_x);
     }
 
     fn execute_sty(&mut self, addressing_mode: &AddressingMode) {
-        let (memory_pointer, _) = self.get_memory_data(&addressing_mode)
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for STA instruction!");
 
         self.write(memory_pointer, self.register_y);
     }
 
-    fn execute_tax(&mut self) {
+    fn execute_tax(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Zero, self.register_a == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, self.register_a & 0x80 == 0x80);
         self.register_x = self.register_a;
     }
 
-    fn execute_tay(&mut self) {
+    fn execute_tay(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Zero, self.register_a == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, self.register_a & 0x80 == 0x80);
         self.register_y = self.register_a;
     }
 
-    fn execute_tsx(&mut self) {
+    fn execute_tsx(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Zero, self.stack_pointer == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, self.stack_pointer & 0x80 == 0x80);
         self.register_x = self.stack_pointer;
     }
 
-    fn execute_txa(&mut self) {
+    fn execute_txa(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Zero, self.register_x == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, self.register_x & 0x80 == 0x80);
         self.register_a = self.register_x;
     }
 
-    fn execute_txs(&mut self) {
+    fn execute_txs(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.stack_pointer = self.register_x;
     }
 
-    fn execute_tya(&mut self) {
+    fn execute_tya(&mut self, addressing_mode: &AddressingMode) {
+        self.get_memory_data(addressing_mode);
         self.status.set_flag(CpuStatusRegisterFlags::Zero, self.register_y == 0);
         self.status.set_flag(CpuStatusRegisterFlags::Negative, self.register_y & 0x80 == 0x80);
         self.register_a = self.register_y;
+    }
+
+    // TODO: add tests
+    fn execute_lax(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for LAX (LDA + TAX) instruction!");
+
+        let memory_value = self.read(memory_pointer);
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, memory_value == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, memory_value & 0x80 == 0x80);
+        self.register_a = memory_value;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, self.register_a == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, self.register_a & 0x80 == 0x80);
+        self.register_x = self.register_a;
+    }
+
+    // TODO: add tests
+    fn execute_sax(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for SAX instruction!");
+
+        let result = self.register_a & self.register_x;
+        self.write(memory_pointer, result);
+    }
+
+    // TODO: add tests
+    fn execute_dcp(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for DCP instruction!");
+
+        let memory_value = self.read(memory_pointer);
+        let result = memory_value.wrapping_sub(1);
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.write(memory_pointer, result);
+        
+        let register_value = self.register_a;
+        let memory_value = self.read(memory_pointer);
+        let result = register_value.wrapping_sub(memory_value);
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, register_value >= memory_value);
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+    }
+
+    // TODO: add tests
+    fn execute_isc(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for ISC instruction!");
+
+        let memory_value = self.read(memory_pointer);
+        let result = memory_value.wrapping_add(1);
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.write(memory_pointer, result);
+
+        let a = self.register_a as u16;
+        let m = self.read(memory_pointer) as u16 ^ 0xFF;
+        let c = if self.status.get_flag(CpuStatusRegisterFlags::Carry) { 1u16 } else { 0u16 };
+        let result = a.wrapping_add(m).wrapping_add(c);
+        let overflow = (a ^ result) & !(a ^ m) & 0x80 == 0x80;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, result > 255);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result as u8 & 0x80 == 0x80);
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result as u8 == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Overflow, overflow);
+        self.register_a = result as u8;
+    }
+
+    // TODO: add tests
+    fn execute_slo(&mut self, addressing_mode: &AddressingMode) {
+        let memory_data = self.get_memory_data(addressing_mode);
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for SLO instruction!");
+
+        let value = self.read(memory_pointer);
+        let result = value << 1;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x80 == 0x80);
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.write(memory_pointer, result);
+
+        let result = self.register_a | result;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.register_a = result;
+    }
+
+    // TODO: add tests
+    fn execute_rla(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for RLA instruction!");
+
+        let value = self.read(memory_pointer);
+        let carry_flag = self.status.get_flag(CpuStatusRegisterFlags::Carry);
+        let result = if carry_flag {
+            value.rotate_left(1) | 0x1
+        } else {
+            value.rotate_left(1) & !0x1
+        };
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x80 == 0x80);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.write(memory_pointer, result);
+
+        let result = self.register_a & result;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.register_a = result;
+    }
+
+    // TODO: add tests
+    fn execute_sre(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for SRE instruction!");
+
+        let value = self.read(memory_pointer);
+        let result = value >> 1;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x1 == 0x1);
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.write(memory_pointer, result);
+
+        let result = self.register_a ^ result;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.register_a = result;
+    }
+
+    // TODO: add tests
+    fn execute_rra(&mut self, addressing_mode: &AddressingMode) {
+        let (memory_pointer, _) = self.get_memory_data(addressing_mode)
+            .expect("Invalid Addressing mode for ADC instruction!");
+
+        let value = self.read(memory_pointer);
+        let carry_flag = self.status.get_flag(CpuStatusRegisterFlags::Carry);
+        let result = if carry_flag {
+            value.rotate_right(1) | 0x80
+        } else {
+            value.rotate_right(1) & !0x80
+        };
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, value & 0x1 == 0x1);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result & 0x80 == 0x80);
+        self.write(memory_pointer, result);
+
+        let a = self.register_a as u16;
+        let m = self.read(memory_pointer) as u16;
+        let c = if self.status.get_flag(CpuStatusRegisterFlags::Carry) { 1u16 } else { 0u16 };
+        let result = a.wrapping_add(m).wrapping_add(c);
+        let overflow = (a ^ result) & !(a ^ m) & 0x80 == 0x80;
+
+        self.status.set_flag(CpuStatusRegisterFlags::Carry, result > 255);
+        self.status.set_flag(CpuStatusRegisterFlags::Negative, result as u8 & 0x80 == 0x80);
+        self.status.set_flag(CpuStatusRegisterFlags::Zero, result as u8 == 0);
+        self.status.set_flag(CpuStatusRegisterFlags::Overflow, overflow);
+        self.register_a = result as u8;
     }
 
     pub fn fetch(&mut self) {
@@ -983,10 +1357,9 @@ impl Cpu {
             addressing_mode
         } = INSTRUCTIONS[self.read(self.program_counter) as usize];
 
-        let current_program_counter = {
-            self.program_counter = self.program_counter.wrapping_add(1);
-            self.program_counter
-        };
+        self.program_counter = self.program_counter.wrapping_add(1);
+
+        let current_program_counter = self.program_counter;
 
         if let Some(_) = self.bus.borrow_mut().poll_interrupt() {
             // TODO: add interrupt handle
@@ -1005,53 +1378,62 @@ impl Cpu {
             "BCS" => self.execute_bcs(),
             "BEQ" => self.execute_beq(),
             "BIT" => self.execute_bit(&addressing_mode),
-            "BMI" => self.execute_bne(),
+            "BMI" => self.execute_bmi(),
+            "BNE" => self.execute_bne(),
             "BPL" => self.execute_bpl(),
-            "BRK" => self.execute_brk(),
+            "BRK" => self.execute_brk(&addressing_mode),
             "BVC" => self.execute_bvc(),
             "BVS" => self.execute_bvs(),
-            "CLC" => self.execute_clc(),
-            "CLD" => self.execute_cld(),
-            "CLV" => self.execute_clv(),
+            "CLC" => self.execute_clc(&addressing_mode),
+            "CLD" => self.execute_cld(&addressing_mode),
+            "CLV" => self.execute_clv(&addressing_mode),
             "CMP" => self.execute_cmp(&addressing_mode),
             "CPX" => self.execute_cpx(&addressing_mode),
             "CPY" => self.execute_cpy(&addressing_mode),
             "DEC" => self.execute_dec(&addressing_mode),
-            "DEX" => self.execute_dex(),
-            "DEY" => self.execute_dey(),
+            "DEX" => self.execute_dex(&addressing_mode),
+            "DEY" => self.execute_dey(&addressing_mode),
             "EOR" => self.execute_eor(&addressing_mode),
             "INC" => self.execute_inc(&addressing_mode),
-            "INX" => self.execute_inx(),
-            "INY" => self.execute_iny(),
+            "INX" => self.execute_inx(&addressing_mode),
+            "INY" => self.execute_iny(&addressing_mode),
             "JMP" => self.execute_jmp(&addressing_mode),
             "JSR" => self.execute_jsr(),
             "LDA" => self.execute_lda(&addressing_mode),
             "LDX" => self.execute_ldx(&addressing_mode),
             "LDY" => self.execute_ldy(&addressing_mode),
             "LSR" => self.execute_lsr(&addressing_mode),
-            "NOP" => self.execute_nop(),
+            "NOP" => self.execute_nop(&addressing_mode),
             "ORA" => self.execute_ora(&addressing_mode),
-            "PHA" => self.execute_pha(),
-            "PHP" => self.execute_php(),
-            "PLA" => self.execute_pla(),
-            "PLP" => self.execute_plp(),
+            "PHA" => self.execute_pha(&addressing_mode),
+            "PHP" => self.execute_php(&addressing_mode),
+            "PLA" => self.execute_pla(&addressing_mode),
+            "PLP" => self.execute_plp(&addressing_mode),
             "ROL" => self.execute_rol(&addressing_mode),
             "ROR" => self.execute_ror(&addressing_mode),
-            "RTI" => self.execute_rti(),
-            "RTS" => self.execute_rts(),
+            "RTI" => self.execute_rti(&addressing_mode),
+            "RTS" => self.execute_rts(&addressing_mode),
             "SBC" => self.execute_sbc(&addressing_mode),
-            "SEC" => self.execute_sec(),
-            "SED" => self.execute_sed(),
-            "SEI" => self.execute_sei(),
+            "SEC" => self.execute_sec(&addressing_mode),
+            "SED" => self.execute_sed(&addressing_mode),
+            "SEI" => self.execute_sei(&addressing_mode),
             "STA" => self.execute_sta(&addressing_mode),
             "STX" => self.execute_stx(&addressing_mode),
             "STY" => self.execute_sty(&addressing_mode),
-            "TAX" => self.execute_tax(),
-            "TAY" => self.execute_tay(),
-            "TSX" => self.execute_tsx(),
-            "TXA" => self.execute_txa(),
-            "TXS" => self.execute_txs(),
-            "TYA" => self.execute_tya(),
+            "TAX" => self.execute_tax(&addressing_mode),
+            "TAY" => self.execute_tay(&addressing_mode),
+            "TSX" => self.execute_tsx(&addressing_mode),
+            "TXA" => self.execute_txa(&addressing_mode),
+            "TXS" => self.execute_txs(&addressing_mode),
+            "TYA" => self.execute_tya(&addressing_mode),
+            "LAX" => self.execute_lax(&addressing_mode),
+            "SAX" => self.execute_sax(&addressing_mode),
+            "DCP" => self.execute_dcp(&addressing_mode),
+            "ISC" => self.execute_isc(&addressing_mode),
+            "SLO" => self.execute_slo(&addressing_mode),
+            "RLA" => self.execute_rla(&addressing_mode),
+            "SRE" => self.execute_sre(&addressing_mode),
+            "RRA" => self.execute_rra(&addressing_mode),
             _ => panic!("Illegal opcode {:#02X} occured!", opcode),
         }
 
@@ -1193,7 +1575,7 @@ mod tests {
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
         cpu.execute_bcc();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BCC with active Carry flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BCC with active Carry flag!");
     }
 
     #[test]
@@ -1207,7 +1589,7 @@ mod tests {
         cpu.write(0x0001, 0x04);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
         cpu.execute_bcs();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BCS with inactive Carry flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BCS with inactive Carry flag!");
 
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
@@ -1226,7 +1608,7 @@ mod tests {
         cpu.write(0x0001, 0x04);
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, false);
         cpu.execute_beq();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BEQ with inactive Zero flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BEQ with inactive Zero flag!");
 
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
@@ -1279,7 +1661,7 @@ mod tests {
         cpu.write(0x0001, 0x04);
         cpu.status.set_flag(CpuStatusRegisterFlags::Negative, false);
         cpu.execute_bmi();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BMI with inactive Negative flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BMI with inactive Negative flag!");
 
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Negative, true);
@@ -1303,7 +1685,7 @@ mod tests {
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
         cpu.execute_bne();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BNE with active Zero flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BNE with active Zero flag!");
     }
 
     #[test]
@@ -1322,7 +1704,7 @@ mod tests {
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Negative, true);
         cpu.execute_bpl();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BPL with active Negative flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BPL with active Negative flag!");
     }
 
     #[test]
@@ -1341,7 +1723,7 @@ mod tests {
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Overflow, true);
         cpu.execute_bvc();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BVC with active Overflow flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BVC with active Overflow flag!");
     }
 
     #[test]
@@ -1360,7 +1742,7 @@ mod tests {
         cpu.program_counter = 0x0001;
         cpu.status.set_flag(CpuStatusRegisterFlags::Overflow, false);
         cpu.execute_bvs();
-        assert_eq!(cpu.program_counter, 0x0002, "CPU PC should be 0x0002 after BVC with inactive Overflow flag!");
+        assert_eq!(cpu.program_counter, 0x0001, "CPU PC should be 0x0001 after BVC with inactive Overflow flag!");
     }
 
     #[test] 
@@ -1370,7 +1752,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
-        cpu.execute_clc();
+        cpu.execute_clc(&AddressingMode::Implicit);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be unset!");
     }
@@ -1382,7 +1764,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, true);
-        cpu.execute_cld();
+        cpu.execute_cld(&AddressingMode::Implicit);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::DecimalMode), "Decimal mode flag should be unset!");
     }
@@ -1394,7 +1776,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
-        cpu.execute_cli();
+        cpu.execute_cli(&AddressingMode::Implicit);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::InterruptDisable), "Interrupt disable flag should be unset!");
     }
@@ -1406,7 +1788,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Overflow, true);
-        cpu.execute_clv();
+        cpu.execute_clv(&AddressingMode::Implicit);
 
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Overflow), "Overflow flag should be unset!");
     }
@@ -1531,7 +1913,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
-        cpu.execute_dex();
+        cpu.execute_dex(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_x, 127, "Register X should be 127!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset!");
@@ -1545,7 +1927,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 128;
-        cpu.execute_dey();
+        cpu.execute_dey(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_y, 127, "Register Y should be 127!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset!");
@@ -1592,7 +1974,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(Clock::new()));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
-        cpu.execute_inx();
+        cpu.execute_inx(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_x, 129, "Register X should be 127!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset!");
@@ -1607,7 +1989,7 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 128;
-        cpu.execute_iny();
+        cpu.execute_iny(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_y, 129, "Register Y should be 127!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unset!");
@@ -1647,7 +2029,7 @@ mod tests {
 
         let lo = cpu.read(0x0100 + cpu.stack_pointer.wrapping_add(1) as u16);
         let hi = cpu.read(0x0100 + cpu.stack_pointer.wrapping_add(2) as u16);
-        assert_eq!(lo, 0x02, "Invalid lobyte of PC in Stack!");
+        assert_eq!(lo, 0x01, "Invalid lobyte of PC in Stack!");
         assert_eq!(hi, 0x04, "Invalid hibyte of PC in Stack!");
     }
 
@@ -1762,7 +2144,7 @@ mod tests {
 
         let stack_pointer_buf = cpu.stack_pointer;
 
-        cpu.execute_pha();
+        cpu.execute_pha(&AddressingMode::Implicit);
         assert_eq!(cpu.stack_pointer, stack_pointer_buf.wrapping_sub(1), "Invalid Stack pointer!");
 
         let register_from_stack = cpu.read(0x0100 + stack_pointer_buf as u16);
@@ -1778,11 +2160,16 @@ mod tests {
 
         let stack_pointer_buf = cpu.stack_pointer;
         
-        cpu.execute_php();
+        cpu.execute_php(&AddressingMode::Implicit);
         assert_eq!(cpu.stack_pointer, stack_pointer_buf.wrapping_sub(1), "Invalid Stack pointer!");
 
         let status_from_stack = cpu.read(0x0100 + stack_pointer_buf as u16);
-        assert_eq!(cpu.status.get(), status_from_stack, "Invalid value of register inside Stack!");
+
+        assert_eq!(
+            cpu.status.get() | CpuStatusRegisterFlags::Break as u8,
+            status_from_stack,
+            "Invalid value of register inside Stack!"
+        );
     }
 
     #[test]
@@ -1794,7 +2181,7 @@ mod tests {
 
         cpu.write(0x150, 0xFF);
         cpu.stack_pointer = 0x4F;
-        cpu.execute_pla();
+        cpu.execute_pla(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_a, 0xFF, "Register A should have 0xFF!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
@@ -1802,7 +2189,7 @@ mod tests {
 
         cpu.write(0x150, 0x00);
         cpu.stack_pointer = 0x4F;
-        cpu.execute_pla();
+        cpu.execute_pla(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_a, 0x00, "Register A should have 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
@@ -1818,9 +2205,9 @@ mod tests {
 
         cpu.write(0x150, 0xFF);
         cpu.stack_pointer = 0x4F;
-        cpu.execute_plp();
+        cpu.execute_plp(&AddressingMode::Implicit);
 
-        assert_eq!(cpu.status.get(), 0xFF, "Status should have 0xFF!");
+        assert_eq!(cpu.status.get(), 0b1110_1111, "Status should have 0b1110_1111!");
     }
 
     #[test]
@@ -1835,7 +2222,8 @@ mod tests {
         cpu.execute_rol(&AddressingMode::ZeroPage);
 
         let zeropage_value = cpu.read(0x0000);
-        assert_eq!(zeropage_value, 0xAAu8.rotate_left(1), "Invalid value in ZeroPage!");
+        let expected_result = 0xAAu8.rotate_left(1) - 0x1;
+        assert_eq!(zeropage_value, expected_result, "Invalid value in ZeroPage!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Zero flag should be unchanged!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
@@ -1886,7 +2274,7 @@ mod tests {
         cpu.write(0x0151, 0xAB);
         cpu.write(0x0150, 0b1010_1010);
         cpu.stack_pointer = 0x4F;
-        cpu.execute_rti();
+        cpu.execute_rti(&AddressingMode::Implicit);
 
         assert_eq!(cpu.program_counter, 0xFFAB, "Program counter should have 0xAAFF!");
         assert_eq!(cpu.status.get(), 0b1010_1010, "Status should have 0b10101010!");
@@ -1902,9 +2290,9 @@ mod tests {
         cpu.write(0x0151, 0xFF);
         cpu.write(0x0150, 0xAA);
         cpu.stack_pointer = 0x4F;
-        cpu.execute_rts();
+        cpu.execute_rts(&AddressingMode::Implicit);
 
-        assert_eq!(cpu.program_counter, 0xFFAA, "Program counter should have 0xAAFF!");
+        assert_eq!(cpu.program_counter, 0xFFAB, "Program counter should have 0xAAFF!");
     }
 
     #[test]
@@ -1947,7 +2335,7 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
-        cpu.execute_sec();
+        cpu.execute_sec(&AddressingMode::Implicit);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Carry), "Carry flag should be set!");
     }
@@ -1960,7 +2348,7 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, false);
-        cpu.execute_sed();
+        cpu.execute_sed(&AddressingMode::Implicit);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::DecimalMode), "Decimal mode flag should be set!");
     }
@@ -1973,7 +2361,7 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, false);
-        cpu.execute_sei();
+        cpu.execute_sei(&AddressingMode::Implicit);
 
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::InterruptDisable), "Interrupt disable flag should be set!");
     }
@@ -2034,14 +2422,14 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
-        cpu.execute_tax();
+        cpu.execute_tax(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_x, 0xFF, "Register X should have 0xFF!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.register_a = 0x00;
-        cpu.execute_tax();
+        cpu.execute_tax(&AddressingMode::Implicit);
         assert_eq!(cpu.register_x, 0x00, "Register X should have 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be set!");
@@ -2055,14 +2443,14 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
-        cpu.execute_tay();
+        cpu.execute_tay(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_y, 0xFF, "Register Y should have 0xFF!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.register_a = 0x00;
-        cpu.execute_tay();
+        cpu.execute_tay(&AddressingMode::Implicit);
         assert_eq!(cpu.register_y, 0x00, "Register Y should have 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be set!");
@@ -2076,14 +2464,14 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.stack_pointer = 0xAB;
-        cpu.execute_tsx();
+        cpu.execute_tsx(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_x, 0xAB, "Register X should have 0xAB!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.stack_pointer = 0x00;
-        cpu.execute_tsx();
+        cpu.execute_tsx(&AddressingMode::Implicit);
         assert_eq!(cpu.register_x, 0x00, "Register X should have 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be set!");
@@ -2097,14 +2485,14 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xAB;
-        cpu.execute_txa();
+        cpu.execute_txa(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_a, 0xAB, "Register A should have 0xAB!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.register_x = 0x00;
-        cpu.execute_txa();
+        cpu.execute_txa(&AddressingMode::Implicit);
         assert_eq!(cpu.register_a, 0x00, "Register A should have 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be set!");
@@ -2118,7 +2506,7 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xAB;
-        cpu.execute_txs();
+        cpu.execute_txs(&AddressingMode::Implicit);
 
         assert_eq!(cpu.stack_pointer, 0xAB, "Stack pointer should have 0xAB!");
     }
@@ -2131,14 +2519,14 @@ mod tests {
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 0xAB;
-        cpu.execute_tya();
+        cpu.execute_tya(&AddressingMode::Implicit);
 
         assert_eq!(cpu.register_a, 0xAB, "Register A should have 0xAB!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be set!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be unset!");
 
         cpu.register_y = 0x00;
-        cpu.execute_tya();
+        cpu.execute_tya(&AddressingMode::Implicit);
         assert_eq!(cpu.register_a, 0x00, "Register A should have 0x00!");
         assert!(!cpu.status.get_flag(CpuStatusRegisterFlags::Negative), "Negative flag should be unset!");
         assert!(cpu.status.get_flag(CpuStatusRegisterFlags::Zero), "Negative flag should be set!");
