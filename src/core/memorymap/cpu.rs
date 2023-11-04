@@ -5,7 +5,6 @@ use crate::core::mappers::Mapper;
 use crate::core::memory::Memory;
 
 use super::MemoryMap;
-use super::MemoryMapType;
 
 pub struct CpuMemoryMap {
     internal_ram: [u8; 0x800],
@@ -41,8 +40,4 @@ impl Memory for CpuMemoryMap {
     }
 }
 
-impl MemoryMap for CpuMemoryMap {
-    fn get_type(&self) -> MemoryMapType {
-        MemoryMapType::Cpu
-    }
-}
+impl MemoryMap for CpuMemoryMap {}

@@ -1,4 +1,5 @@
 pub mod cpu;
+pub mod ppu;
 
 pub trait Register<F, V> {
     fn get(&self) -> V;

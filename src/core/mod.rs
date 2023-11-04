@@ -6,3 +6,4 @@ pub mod bus;
 pub mod clock;
 pub mod cartridge;
 mod mappers;
+pub mod ppu;

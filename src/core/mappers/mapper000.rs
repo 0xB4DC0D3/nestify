@@ -40,7 +40,7 @@ impl Memory for Mapper000 {
 }
 
 impl Mapper for Mapper000 {
-    fn get_chr_rom(&self) -> &Vec<u8> {
-        &self.chr_rom
+    fn get_chr_rom(&mut self) -> &mut Vec<u8> {
+        &mut self.chr_rom
     }
 }

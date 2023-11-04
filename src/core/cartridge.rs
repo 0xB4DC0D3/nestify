@@ -1,9 +1,12 @@
-use std::{rc::Rc, cell::RefCell};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use super::mappers::{Mapper000, Mapper};
+use super::ppu::Mirroring;
+use super::mappers::Mapper;
+use super::mappers::Mapper000;
 
-// TODO: add mirroring for PPU
 pub struct Cartridge {
+    mirroring: Mirroring,
     mapper: Rc<RefCell<Box<dyn Mapper>>>,
 }
 
@@ -20,8 +23,17 @@ impl Cartridge {
 
         let flag6_metadata = rom[6];
         let (mirroring, mapper_lower_nybble, has_trainer, has_batterybacked_prg_ram) = {
-            let four_screen_mirroring = (flag6_metadata >> 3) & 0x1;
-            let mirroring = flag6_metadata & 0x1;
+            let four_screen_mirroring = (flag6_metadata >> 3) & 0x1 == 0x1;
+            let mirroring = if four_screen_mirroring {
+                Mirroring::FourScreen
+            } else {
+                match flag6_metadata & 0x1 {
+                    0x00 => Mirroring::Horizontal,
+                    0x01 => Mirroring::Vertical,
+                    _ => panic!("Invalid Flag6, could not happen!"),
+                }
+            };
+
             let has_batterybacked_prg_ram = (flag6_metadata >> 1) & 0x1 == 0x1;
             let has_trainer = (flag6_metadata >> 2) & 0x1 == 0x1;
             let mapper_lower_nybble = flag6_metadata >> 4;
@@ -75,14 +87,20 @@ impl Cartridge {
         };
         
         Self {
+            mirroring,
             mapper: Rc::new(RefCell::new(mapper)),
         }
+    }
+
+    pub fn get_mirroring(&self) -> Mirroring {
+        self.mirroring
     }
 
     pub fn empty() -> Self {
         let mapper = Box::new(Mapper000::new(vec![0; 0x8000], vec![0; 0x2000]));
 
         Self {
+            mirroring: Mirroring::Horizontal,
             mapper: Rc::new(RefCell::new(mapper)),
         }
     }

@@ -1,16 +1,23 @@
-// TODO: add total_cycles for disassembling info in the future
+use std::{rc::Rc, cell::RefCell};
+
+use super::ppu::Ppu;
+
 pub struct Clock {
-    cycles: usize,
+    ppu: Rc<RefCell<Ppu>>,
 }
 
 impl Clock {
-    pub fn new() -> Self {
+    pub fn new(ppu: &Rc<RefCell<Ppu>>) -> Self {
         Self {
-            cycles: 0,
+            ppu: ppu.clone(),
         }
     }
 
-    pub fn tick(&mut self, amount: usize) {
-        self.cycles = amount;
+    pub fn tick(&self, amount: usize) {
+        self.ppu.borrow_mut().tick(amount);
+    }
+
+    pub fn ppu(&self) -> &Rc<RefCell<Ppu>> {
+        &self.ppu
     }
 }

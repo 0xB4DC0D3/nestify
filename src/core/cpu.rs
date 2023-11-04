@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use super::bus::Bus;
 use super::clock::Clock;
-use super::memorymap::MemoryMapType;
 use super::registers::Register;
 use super::registers::cpu::status::{CpuStatusRegister, CpuStatusRegisterFlags};
 use super::memory::Memory;
@@ -1348,6 +1347,16 @@ impl Cpu {
         self.register_a = result as u8;
     }
 
+    fn handle_interrupt(&mut self) {
+        let mask_without_break_flag = !(CpuStatusRegisterFlags::Break as u8);
+
+        self.push_stack_u16(self.program_counter);
+        self.push_stack(self.status.get() & mask_without_break_flag);
+        self.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
+        self.program_counter = self.read_u16(0xFFFA);
+        self.clock.borrow().tick(7);
+    }
+
     pub fn fetch(&mut self) {
         let Instruction {
             opcode,
@@ -1361,8 +1370,9 @@ impl Cpu {
 
         let current_program_counter = self.program_counter;
 
-        if let Some(_) = self.bus.borrow_mut().poll_interrupt() {
-            // TODO: add interrupt handle
+        let interrupt = self.bus.borrow_mut().poll_interrupt();
+        if let Some(_) = interrupt {
+            self.handle_interrupt();
         }
 
         self.internal_state = Some(InternalState {
@@ -1386,6 +1396,7 @@ impl Cpu {
             "BVS" => self.execute_bvs(),
             "CLC" => self.execute_clc(&addressing_mode),
             "CLD" => self.execute_cld(&addressing_mode),
+            "CLI" => self.execute_cli(&addressing_mode),
             "CLV" => self.execute_clv(&addressing_mode),
             "CMP" => self.execute_cmp(&addressing_mode),
             "CPX" => self.execute_cpx(&addressing_mode),
@@ -1453,16 +1464,24 @@ impl Memory for Cpu {
             0x0000..=0x1FFF => {
                 self.bus
                     .borrow_mut()
-                    .get_memory_map(MemoryMapType::Cpu)
+                    .cpu_memory_map()
                     .read(address & 0x7FF)
             },
-            0x2000..=0x3FFF => todo!("PPU registers"),
+            0x2000 => panic!("Attempt to read from PPU Controller register!"),
+            0x2001 => panic!("Attempt to read from PPU Mask register!"),
+            0x2002 => self.clock.borrow().ppu().borrow_mut().read_status(),
+            0x2003 => panic!("Attempt to read from PPU OAM Address register!"),
+            0x2004 => self.clock.borrow().ppu().borrow_mut().read_oamdata(),
+            0x2005 => panic!("Attempt to read from PPU Scroll register!"),
+            0x2006 => panic!("Attempt to read from PPU Address register!"),
+            0x2007 => self.clock.borrow().ppu().borrow_mut().read_data(),
+            0x2008..=0x3FFF => self.read(address & 0x2007),
             0x4000..=0x4017 => todo!("PPU OAM DMA, APU"),
             0x4018..=0x401F => panic!("APU and I/O func. test is normally disabled!"),
             0x4020..=0xFFFF => {
                 self.bus
                     .borrow_mut()
-                    .get_memory_map(MemoryMapType::Cpu)
+                    .cpu_memory_map()
                     .read(address)
             },
         }
@@ -1473,16 +1492,29 @@ impl Memory for Cpu {
             0x0000..=0x1FFF => {
                 self.bus
                     .borrow_mut()
-                    .get_memory_map(MemoryMapType::Cpu)
+                    .cpu_memory_map()
                     .write(address & 0x7FF, data);
             },
-            0x2000..=0x3FFF => todo!("PPU registers"),
-            0x4000..=0x4017 => todo!("PPU OAM DMA, APU"),
+            0x2000 => self.clock.borrow().ppu().borrow_mut().write_controller(data),
+            0x2001 => self.clock.borrow().ppu().borrow_mut().write_mask(data),
+            0x2002 => panic!("Attempt to write to PPU Status register!"),
+            0x2003 => self.clock.borrow().ppu().borrow_mut().write_oamaddress(data),
+            0x2004 => self.clock.borrow().ppu().borrow_mut().write_oamdata(data),
+            0x2005 => self.clock.borrow().ppu().borrow_mut().write_scroll(data),
+            0x2006 => self.clock.borrow().ppu().borrow_mut().write_address(data),
+            0x2007 => self.clock.borrow().ppu().borrow_mut().write_data(data),
+            0x2008..=0x3FFF => self.write(address & 0x2007, data),
+            0x4000..=0x4017 => {
+                match address {
+                    0x4014 => self.clock.borrow().ppu().borrow_mut().write_oamdma(data),
+                    _ => todo!("APU isn't implemented!")
+                }
+            },
             0x4018..=0x401F => panic!("APU and I/O func. test is normally disabled!"),
             0x4020..=0xFFFF => {
                 self.bus
                     .borrow_mut()
-                    .get_memory_map(MemoryMapType::Cpu)
+                    .cpu_memory_map()
                     .write(address, data);
             },
         }
@@ -1491,15 +1523,15 @@ impl Memory for Cpu {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::cartridge::Cartridge;
-
+    use crate::core::{cartridge::Cartridge, ppu::{Ppu, Mirroring}};
     use super::*;
 
     #[test]
     fn test_adc_instruction() {
         let cartridge = Cartridge::empty();
         let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 127;
         cpu.write(0x0000, 0x69);
@@ -1531,7 +1563,8 @@ mod tests {
     fn test_and_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 127;
         cpu.write(0x0000, 0x29);
@@ -1548,7 +1581,8 @@ mod tests {
     fn test_asl_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 0x80;
         cpu.execute_asl(&AddressingMode::Accumulator);
@@ -1563,7 +1597,8 @@ mod tests {
     fn test_bcc_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1582,7 +1617,8 @@ mod tests {
     fn test_bcs_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1601,7 +1637,8 @@ mod tests {
     fn test_beq_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1620,7 +1657,8 @@ mod tests {
     fn test_bit_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
@@ -1654,7 +1692,8 @@ mod tests {
     fn test_bmi_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1673,7 +1712,8 @@ mod tests {
     fn test_bne_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1692,7 +1732,8 @@ mod tests {
     fn test_bpl_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1711,7 +1752,8 @@ mod tests {
     fn test_bvc_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1730,7 +1772,8 @@ mod tests {
     fn test_bvs_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0001;
@@ -1749,7 +1792,8 @@ mod tests {
     fn test_clc_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, true);
         cpu.execute_clc(&AddressingMode::Implicit);
@@ -1761,7 +1805,8 @@ mod tests {
     fn test_cld_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, true);
         cpu.execute_cld(&AddressingMode::Implicit);
@@ -1773,7 +1818,8 @@ mod tests {
     fn test_cli_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, true);
         cpu.execute_cli(&AddressingMode::Implicit);
@@ -1785,7 +1831,8 @@ mod tests {
     fn test_clv_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.status.set_flag(CpuStatusRegisterFlags::Overflow, true);
         cpu.execute_clv(&AddressingMode::Implicit);
@@ -1797,7 +1844,8 @@ mod tests {
     fn test_cmp_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 100;
         cpu.write(0x0000, 99);
@@ -1829,7 +1877,8 @@ mod tests {
     fn test_cpx_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 100;
         cpu.write(0x0000, 99);
@@ -1861,7 +1910,8 @@ mod tests {
     fn test_cpy_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 100;
         cpu.write(0x0000, 99);
@@ -1893,7 +1943,8 @@ mod tests {
     fn test_dec_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.write(0x0001, 129);
         cpu.write(0x0002, 0x1);
@@ -1910,7 +1961,8 @@ mod tests {
     fn test_dex_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
         cpu.execute_dex(&AddressingMode::Implicit);
@@ -1924,7 +1976,8 @@ mod tests {
     fn test_dey_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_y = 128;
         cpu.execute_dey(&AddressingMode::Implicit);
@@ -1938,7 +1991,8 @@ mod tests {
     fn test_eor_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_a = 12;
         cpu.write(0x0000, 37);
@@ -1954,7 +2008,8 @@ mod tests {
     fn test_inc_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.write(0x0001, 129);
         cpu.write(0x0002, 0x1);
@@ -1971,7 +2026,8 @@ mod tests {
     fn test_inx_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-        let clock = Rc::new(RefCell::new(Clock::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
         cpu.register_x = 128;
         cpu.execute_inx(&AddressingMode::Implicit);
@@ -1985,7 +2041,8 @@ mod tests {
     fn test_iny_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 128;
@@ -2000,7 +2057,8 @@ mod tests {
     fn test_jmp_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
@@ -2015,7 +2073,8 @@ mod tests {
     fn test_jsr_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
@@ -2037,7 +2096,8 @@ mod tests {
     fn test_lda_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
@@ -2060,7 +2120,8 @@ mod tests {
     fn test_ldx_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
@@ -2083,7 +2144,8 @@ mod tests {
     fn test_ldy_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.program_counter = 0x0000;
@@ -2106,7 +2168,8 @@ mod tests {
     fn test_lsr_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x81;
@@ -2122,7 +2185,8 @@ mod tests {
     fn test_ora_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x81;
@@ -2139,7 +2203,8 @@ mod tests {
     fn test_pha_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
@@ -2155,7 +2220,8 @@ mod tests {
     fn test_php_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         let stack_pointer_buf = cpu.stack_pointer;
@@ -2176,7 +2242,8 @@ mod tests {
     fn test_pla_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x150, 0xFF);
@@ -2200,7 +2267,8 @@ mod tests {
     fn test_plp_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x150, 0xFF);
@@ -2214,7 +2282,8 @@ mod tests {
     fn test_rol_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
@@ -2241,7 +2310,8 @@ mod tests {
     fn test_ror_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Zero, true);
@@ -2267,7 +2337,8 @@ mod tests {
     fn test_rti_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x0152, 0xFF);
@@ -2284,7 +2355,8 @@ mod tests {
     fn test_rts_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.write(0x0151, 0xFF);
@@ -2299,7 +2371,8 @@ mod tests {
     fn test_sbc_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0x01;
@@ -2331,7 +2404,8 @@ mod tests {
     fn test_sec_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::Carry, false);
@@ -2344,7 +2418,8 @@ mod tests {
     fn test_sed_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::DecimalMode, false);
@@ -2357,7 +2432,8 @@ mod tests {
     fn test_sei_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.status.set_flag(CpuStatusRegisterFlags::InterruptDisable, false);
@@ -2370,7 +2446,8 @@ mod tests {
     fn test_sta_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
@@ -2386,7 +2463,8 @@ mod tests {
     fn test_stx_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xFF;
@@ -2402,7 +2480,8 @@ mod tests {
     fn test_sty_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 0xFF;
@@ -2418,7 +2497,8 @@ mod tests {
     fn test_tax_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
@@ -2439,7 +2519,8 @@ mod tests {
     fn test_tay_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_a = 0xFF;
@@ -2460,7 +2541,8 @@ mod tests {
     fn test_tsx_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.stack_pointer = 0xAB;
@@ -2481,7 +2563,8 @@ mod tests {
     fn test_txa_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xAB;
@@ -2502,7 +2585,8 @@ mod tests {
     fn test_txs_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_x = 0xAB;
@@ -2515,7 +2599,8 @@ mod tests {
     fn test_tya_instruction() {
         let cartridge = Cartridge::empty();
 		let bus = Rc::new(RefCell::new(Bus::new(&cartridge)));
-		let clock = Rc::new(RefCell::new(Clock::new()));
+		let ppu = Rc::new(RefCell::new(Ppu::new(&bus, Mirroring::Horizontal)));
+		let clock = Rc::new(RefCell::new(Clock::new(&ppu)));
 		let mut cpu = Cpu::new(&bus, &clock);
 
         cpu.register_y = 0xAB;

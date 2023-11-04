@@ -6,11 +6,4 @@ pub use ppu::*;
 
 use super::memory::Memory;
 
-pub enum MemoryMapType {
-    Cpu,
-    Ppu,
-}
-
-pub trait MemoryMap: Memory {
-    fn get_type(&self) -> MemoryMapType;
-}
+pub trait MemoryMap: Memory {}
