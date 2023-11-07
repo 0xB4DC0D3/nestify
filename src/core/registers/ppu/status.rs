@@ -12,7 +12,6 @@ pub struct PpuStatusRegister {
 
 impl PpuStatusRegister {
     pub fn new() -> Self {
-        // Break and InterruptDisable always true when initialized
         Self {
             value: 0x00,
         }

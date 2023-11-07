@@ -18,7 +18,6 @@ pub struct PpuMaskRegister {
 
 impl PpuMaskRegister {
     pub fn new() -> Self {
-        // Break and InterruptDisable always true when initialized
         Self {
             value: 0x00,
         }

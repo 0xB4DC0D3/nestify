@@ -50,9 +50,8 @@ impl Memory for PpuMemoryMap {
             },
             0x2000..=0x2FFF => self.nametable[address as usize - 0x2000],
             0x3000..=0x3EFF => self.nametable[address as usize - 0x3000],
-            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => self.nametable[address as usize - 0x3F10],
-            0x3F00..=0x3F1F => self.palette[address as usize - 0x3F00],
-            0x3F20..=0x3FFF => self.palette[address as usize & 0x3F1F - 0x3F00],
+            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => self.palette[address as usize - 0x3F10],
+            0x3F00..=0x3FFF => self.palette[address as usize & 0x3F1F - 0x3F00],
             _ => panic!("Unable to read from address {:#04X} in CPU Memory Map!", address),
         }
     }
@@ -73,12 +72,9 @@ impl Memory for PpuMemoryMap {
                 self.nametable[address as usize - 0x3000] = data;
             },
             0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
-                self.nametable[address as usize - 0x3F10] = data;
+                self.palette[address as usize - 0x3F10] = data;
             },
-            0x3F00..=0x3F1F => {
-                self.palette[address as usize - 0x3F00] = data;
-            },
-            0x3F20..=0x3FFF => {
+            0x3F00..=0x3FFF => {
                 self.palette[address as usize & 0x3F1F - 0x3F00] = data;
             },
             _ => panic!("Unable to read from address {:#04X} in CPU Memory Map!", address),

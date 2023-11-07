@@ -18,7 +18,6 @@ pub struct PpuDataRegister {
 
 impl PpuDataRegister {
     pub fn new() -> Self {
-        // Break and InterruptDisable always true when initialized
         Self {
             value: 0x00,
         }

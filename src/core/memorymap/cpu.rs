@@ -24,7 +24,7 @@ impl Memory for CpuMemoryMap {
     fn read(&self, address: u16) -> u8 {
         match address {
             0x0000..=0x1FFF => self.internal_ram[address as usize & 0x7FF],
-            0x8000..=0xFFFF => self.mapper.borrow_mut().read(address),
+            0x4020..=0xFFFF => self.mapper.borrow_mut().read(address),
             _ => panic!("Unable to read from address {:#04X} in CPU Memory Map!", address),
         }
     }

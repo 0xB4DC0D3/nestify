@@ -5,12 +5,12 @@ use super::bus::Bus;
 use super::memory::Memory;
 use super::registers::Register;
 use super::registers::ppu::data::PpuDataRegister;
-use super::registers::ppu::address::PpuAddressRegister;
-use super::registers::ppu::scroll::PpuScrollRegister;
+use super::registers::ppu::address::{PpuAddressRegister, self};
+use super::registers::ppu::scroll::{PpuScrollRegister, PpuScrollRegisterFlags};
 use super::registers::ppu::oamdata::PpuOamDataRegister;
 use super::registers::ppu::oamaddress::PpuOamAddressRegister;
 use super::registers::ppu::status::{PpuStatusRegister, PpuStatusRegisterFlags};
-use super::registers::ppu::mask::PpuMaskRegister;
+use super::registers::ppu::mask::{PpuMaskRegister, PpuMaskRegisterFlags};
 use super::registers::ppu::controller::{PpuControllerRegister, PpuControllerRegisterFlags};
 
 #[repr(u8)]
@@ -56,11 +56,179 @@ impl Ppu {
         }
     }
 
-    pub fn tick(&mut self, amount: usize) {
-        self.cycles += amount * 3;
+    pub fn is_sprite_zero_hit(&self, cycles: usize) -> bool {
+        let show_sprites = self.mask.get_flag(PpuMaskRegisterFlags::ShowSprites);
+        let y = self.bus
+            .borrow_mut()
+            .ppu_memory_map()
+            .get_oam()
+            .get(0)
+            .cloned()
+            .expect("Unable to get Y coordinate!") as usize;
+
+        let x = self.bus
+            .borrow_mut()
+            .ppu_memory_map()
+            .get_oam()
+            .get(3)
+            .cloned()
+            .expect("Unable to get X coordinate!") as usize;
+
+        (y == self.scanline) && x <= cycles && show_sprites
     }
 
-    pub fn mirror_address(&mut self, address: u16) -> u16 {
+    pub fn tick(&mut self, amount: usize) {
+        self.cycles += amount;
+
+        if self.cycles >= 341 {
+            if self.is_sprite_zero_hit(self.cycles) {
+                self.status.set_flag(PpuStatusRegisterFlags::SpriteZeroHit, true);
+            }
+
+            self.cycles -= 341;
+            self.scanline += 1;
+
+            if self.scanline == 241 {
+                self.status.set_flag(PpuStatusRegisterFlags::VBlank, true);
+                self.status.set_flag(PpuStatusRegisterFlags::SpriteZeroHit, false);
+
+                if self.controller.get_flag(PpuControllerRegisterFlags::GenerateVBlankNMI) {
+                    self.bus.borrow_mut().set_interrupt(Some(()));
+                }
+            }
+
+            if self.scanline >= 262 {
+                self.scanline = 0;
+                self.bus.borrow_mut().set_interrupt(None);
+                self.status.set_flag(PpuStatusRegisterFlags::SpriteZeroHit, false);
+                self.status.set_flag(PpuStatusRegisterFlags::VBlank, false);
+            }
+        }
+    }
+
+    fn read_range(&self, start: u16, amount: u16) -> Vec<u8> {
+        (start..start + amount)
+            .into_iter()
+            .map(|address| {
+                self.read(self.mirror_address(address))
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn get_nametable(&self, nametable_index: u16) -> Vec<u8> {
+        self.read_range(0x2000 + 0x400 * nametable_index, 0x400)
+    }
+
+    pub fn get_pattern_table(&self, pattern_table_index: u16) -> Vec<u8> {
+        let chr_rom_buf = self.read_range(0x1000 * pattern_table_index, 0x1000);
+
+        chr_rom_buf
+            .chunks(16)
+            .flat_map(|chunk| {
+                chunk
+                    .iter()
+                    .zip(chunk.iter().skip(8))
+                    .flat_map(|(&lsbyte, &msbyte)| {
+                        (0..8)
+                            .rev()
+                            .map(|shift| {
+                                let lsbit = (lsbyte >> shift) & 1;
+                                let msbit = (msbyte >> shift) & 1;
+                                (msbit << 1) | lsbit
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn get_palette_table(&self, palette_index: u16) -> Vec<u8> {
+        let palette = self.read_range(0x3F00 + palette_index * 0x4 + 1, 0x4);
+
+        vec![palette[0], palette[1], palette[2], self.read(0x3F00)]
+    }
+
+    pub fn get_sprite_palette_table(&self, palette_index: u16) -> Vec<u8> {
+        self.read_range(0x3F10 + palette_index * 0x4 + 1, 0x4)
+    }
+
+    pub fn get_attribute_table(&self, nametable_index: u16) -> Vec<u8> {
+        self.read_range(0x2000 + nametable_index * 0x400 + 0x3C0, 0x40)
+    }
+
+    pub fn get_nametable_index(&self) -> u16 {
+        (self.controller.get() & 0b11) as u16
+    }
+
+    pub fn get_bg_pattern_table_index(&self) -> u16 {
+        self.controller.get_flag(PpuControllerRegisterFlags::BackgroundPatternTable) as u16
+    }
+
+    pub fn get_spr_patter_table_index(&self) -> u16 {
+        self.controller.get_flag(PpuControllerRegisterFlags::SpritesPatternTable) as u16
+    }
+
+    pub fn get_second_nametable_index(&self, nametable_index: u16) -> u16 {
+        match self.mirroring {
+            Mirroring::Vertical => {
+                match nametable_index {
+                    0 => 1,
+                    1 => 0,
+                    _ => panic!("Invalid nametable index!"),
+                }
+            },
+            Mirroring::Horizontal => {
+                match nametable_index {
+                    0 => 2,
+                    2 => 0,
+                    _ => panic!("Invalid nametable index!"),
+                }
+            },
+            _ => panic!("Currently unsupported mirroring!"),
+        }
+    }
+
+    pub fn get_background_buffer(&self) -> (Vec<u8>, Vec<u8>) {
+        let nametable_index = self.get_nametable_index();
+        let second_nametable_index = self.get_second_nametable_index(nametable_index);
+        let pattern_table_index = self.get_bg_pattern_table_index();
+
+        let pattern_table = self.get_pattern_table(pattern_table_index);
+        let create_buffer = |nametable_index: u16| {
+            self.get_nametable(nametable_index)
+                .iter()
+                .take(0x3C0)
+                .flat_map(|&pattern_table_index| {
+                    let index = pattern_table_index as usize * 64;
+
+                    pattern_table
+                        .get(index..index + 64)
+                        .expect("Unable to get data from Pattern table!")
+                        .to_vec()
+                })
+                .collect()
+        };
+
+        let main_buffer = create_buffer(nametable_index);
+        let second_buffer = create_buffer(second_nametable_index);
+
+        (main_buffer, second_buffer)
+    }
+
+    pub fn get_scroll(&self) -> (u8, u8) {
+        self.scroll.get_scroll()
+    }
+
+    pub fn get_sprites_buffer(&self) -> Vec<u8> {
+        self.bus.borrow_mut().ppu_memory_map().get_oam().to_vec()
+    }
+
+    pub fn has_interrupt(&self) -> bool {
+        self.bus.borrow().get_interrupt().is_some()
+    }
+
+    pub fn mirror_address(&self, address: u16) -> u16 {
         let nametable_index = (address - 0x2000) / 0x400;
         match (self.mirroring, nametable_index) {
             (Mirroring::Horizontal, 1) | (Mirroring::Horizontal, 3) => address - 0x400,
@@ -71,7 +239,15 @@ impl Ppu {
     }
 
     pub fn write_controller(&mut self, data: u8) {
+        let already_in_vblank = self.controller.get_flag(PpuControllerRegisterFlags::GenerateVBlankNMI);
+        let status_vblank = self.status.get_flag(PpuStatusRegisterFlags::VBlank);
+
         self.controller.set(data);
+        let in_vblank = self.controller.get_flag(PpuControllerRegisterFlags::GenerateVBlankNMI);
+
+        if !already_in_vblank && status_vblank && in_vblank {
+            self.bus.borrow_mut().set_interrupt(Some(()));
+        }
     }
 
     pub fn write_mask(&mut self, data: u8) {
@@ -122,7 +298,7 @@ impl Ppu {
     }
 
     pub fn write_oamdma(&mut self, data: u8) {
-        let start = u16::from_le_bytes([data, 0x00]);
+        let start = u16::from_le_bytes([0x00, data]);
         let end = start + 0x100;
         let oam_buf = (start..end)
             .into_iter()

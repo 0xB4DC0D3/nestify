@@ -19,7 +19,6 @@ pub struct PpuScrollRegister {
 
 impl PpuScrollRegister {
     pub fn new() -> Self {
-        // Break and InterruptDisable always true when initialized
         Self {
             value: (0x00, 0x00),
             latch: false,
@@ -28,6 +27,10 @@ impl PpuScrollRegister {
 
     pub fn reset_latch(&mut self) {
         self.latch = false;
+    }
+
+    pub fn get_scroll(&self) -> (u8, u8) {
+        self.value
     }
 }
 

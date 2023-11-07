@@ -19,7 +19,6 @@ pub struct PpuAddressRegister {
 
 impl PpuAddressRegister {
     pub fn new() -> Self {
-        // Break and InterruptDisable always true when initialized
         Self {
             address: (0x00, 0x00),
             latch: false,

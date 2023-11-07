@@ -23,6 +23,8 @@ impl Mapper000 {
 impl Memory for Mapper000 {
     fn read(&self, address: u16) -> u8 {
         match address {
+            // Mapper 000 doesn't have RAM
+            0x4020..=0x7FFF => 0x00,
             0x8000..=0xFFFF => {
                 if !self.is_32kb_size {
                     self.prg_rom[(address as usize - 0x8000) & 0x3FFF]

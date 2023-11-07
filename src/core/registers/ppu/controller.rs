@@ -5,11 +5,11 @@ pub enum PpuControllerRegisterFlags {
     ScrollX = 1 << 0,
     ScrollY = 1 << 1,
     AddressIncrement = 1 << 2,
-    SpritePatternTable = 1 << 3,
+    SpritesPatternTable = 1 << 3,
     BackgroundPatternTable = 1 << 4,
     SpriteSize = 1 << 5,
     MasterSlaveSelect = 1 << 6,
-    GenerateNMI = 1 << 7,
+    GenerateVBlankNMI = 1 << 7,
 }
 
 pub struct PpuControllerRegister {
@@ -18,7 +18,6 @@ pub struct PpuControllerRegister {
 
 impl PpuControllerRegister {
     pub fn new() -> Self {
-        // Break and InterruptDisable always true when initialized
         Self {
             value: 0x00,
         }
