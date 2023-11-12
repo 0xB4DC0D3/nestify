@@ -2,6 +2,7 @@ use crate::core::registers::Register;
 
 #[repr(u8)]
 pub enum PpuStatusRegisterFlags {
+    SpriteOverflow = 1 << 5,
     SpriteZeroHit = 1 << 6,
     VBlank = 1 << 7,
 }

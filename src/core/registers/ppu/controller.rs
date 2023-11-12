@@ -2,13 +2,13 @@ use crate::core::registers::Register;
 
 #[repr(u8)]
 pub enum PpuControllerRegisterFlags {
-    ScrollX = 1 << 0,
-    ScrollY = 1 << 1,
+    _ScrollX = 1 << 0,
+    _ScrollY = 1 << 1,
     AddressIncrement = 1 << 2,
     SpritesPatternTable = 1 << 3,
     BackgroundPatternTable = 1 << 4,
-    SpriteSize = 1 << 5,
-    MasterSlaveSelect = 1 << 6,
+    _SpriteSize = 1 << 5,
+    _MasterSlaveSelect = 1 << 6,
     GenerateVBlankNMI = 1 << 7,
 }
 

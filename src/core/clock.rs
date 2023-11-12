@@ -28,7 +28,9 @@ impl Clock {
         self.cycles += amount;
         let nmi_interrupt_before = self.ppu.borrow().has_interrupt();
 
-        self.ppu.borrow_mut().tick(amount * 3);
+        for _ in 0..(amount * 3) {
+            self.ppu.borrow_mut().tick(1);
+        }
 
         let nmi_interrupt_after = self.ppu.borrow().has_interrupt();
 

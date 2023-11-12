@@ -1262,7 +1262,6 @@ impl Cpu {
 
     // TODO: add tests
     fn execute_slo(&mut self, addressing_mode: &AddressingMode) {
-        let memory_data = self.get_memory_data(addressing_mode);
         let (memory_pointer, _) = self.get_memory_data(addressing_mode)
             .expect("Invalid Addressing mode for SLO instruction!");
 
@@ -1515,7 +1514,13 @@ impl Memory for Cpu {
             0x2008..=0x3FFF => self.write(address & 0x2007, data),
             0x4000..=0x4017 => {
                 match address {
-                    0x4014 => self.clock.borrow().ppu().borrow_mut().write_oamdma(data),
+                    0x4014 => {
+                        self.clock.borrow().ppu().borrow_mut().write_oamdma(data);
+
+                        let odd_cycle = self.clock.borrow().get_cycles() % 2;
+
+                        self.clock.borrow_mut().tick(513 + odd_cycle);
+                    },
                     // TODO: implement write to APU
                     _ => (),
                 }

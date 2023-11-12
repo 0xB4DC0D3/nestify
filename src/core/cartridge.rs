@@ -22,7 +22,7 @@ impl Cartridge {
         let chr_rom_size = rom[5] as u16;
 
         let flag6_metadata = rom[6];
-        let (mirroring, mapper_lower_nybble, has_trainer, has_batterybacked_prg_ram) = {
+        let (mirroring, mapper_lower_nybble, has_trainer, _has_batterybacked_prg_ram) = {
             let four_screen_mirroring = (flag6_metadata >> 3) & 0x1 == 0x1;
             let mirroring = if four_screen_mirroring {
                 Mirroring::FourScreen
@@ -43,16 +43,16 @@ impl Cartridge {
 
         // If it's iNES 2.0 format, flags 8-15 are in NES 2.0 format
         let flag7_metadata = rom[7];
-        let (mapper_upper_nybble, is_nes20_format, is_playchoice10, is_vsunisystem) = {
+        let (_mapper_upper_nybble, _is_nes20_format, _is_playchoice10, _is_vsunisystem) = {
             let mapper_upper_nybble = flag7_metadata >> 4;
             let is_nes20_format = (flag7_metadata >> 2) & 0x3 == 0x2;
             let is_playchoice10 = (flag7_metadata >> 1) & 0x1 == 0x1;
             let is_vsunisystem = flag7_metadata & 0x1 == 0x1;
 
-            (mapper_lower_nybble, is_nes20_format, is_playchoice10, is_vsunisystem)
+            (mapper_upper_nybble, is_nes20_format, is_playchoice10, is_vsunisystem)
         };
 
-        let prg_ram_size = rom[8];
+        let _prg_ram_size = rom[8];
 
         let (prg_rom_begin, prg_rom_end) = {
             let begin = if has_trainer { 16 + 512 } else { 16 };

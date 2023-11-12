@@ -2,14 +2,14 @@ use crate::core::registers::Register;
 
 #[repr(u8)]
 pub enum PpuMaskRegisterFlags {
-    Greyscale = 1 << 0,
-    ShowBackgroundLeftmost = 1 << 1,
-    ShowSpritesLeftmost = 1 << 2,
+    _Greyscale = 1 << 0,
+    _ShowBackgroundLeftmost = 1 << 1,
+    _ShowSpritesLeftmost = 1 << 2,
     ShowBackground = 1 << 3,
     ShowSprites = 1 << 4,
-    EmphasizeRed = 1 << 5,
-    EmphasizeGreen = 1 << 6,
-    EmphasizeBlue = 1 << 7,
+    _EmphasizeRed = 1 << 5,
+    _EmphasizeGreen = 1 << 6,
+    _EmphasizeBlue = 1 << 7,
 }
 
 pub struct PpuMaskRegister {

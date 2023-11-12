@@ -2,14 +2,14 @@ use crate::core::registers::Register;
 
 #[repr(u8)]
 pub enum PpuOamDataRegisterFlags {
-    Bit0 = 1 << 0,
-    Bit1 = 1 << 1,
-    Bit2 = 1 << 2,
-    Bit3 = 1 << 3,
-    Bit4 = 1 << 4,
-    Bit5 = 1 << 5,
-    Bit6 = 1 << 6,
-    Bit7 = 1 << 7,
+    _Bit0 = 1 << 0,
+    _Bit1 = 1 << 1,
+    _Bit2 = 1 << 2,
+    _Bit3 = 1 << 3,
+    _Bit4 = 1 << 4,
+    _Bit5 = 1 << 5,
+    _Bit6 = 1 << 6,
+    _Bit7 = 1 << 7,
 }
 
 pub struct PpuOamDataRegister {
