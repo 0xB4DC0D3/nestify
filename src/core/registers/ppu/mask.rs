@@ -3,8 +3,8 @@ use crate::core::registers::Register;
 #[repr(u8)]
 pub enum PpuMaskRegisterFlags {
     _Greyscale = 1 << 0,
-    _ShowBackgroundLeftmost = 1 << 1,
-    _ShowSpritesLeftmost = 1 << 2,
+    ShowBackgroundLeftmost = 1 << 1,
+    ShowSpritesLeftmost = 1 << 2,
     ShowBackground = 1 << 3,
     ShowSprites = 1 << 4,
     _EmphasizeRed = 1 << 5,

@@ -32,7 +32,7 @@ impl PpuMemoryMap {
         self.oam[address as usize] = value;
     }
 
-    pub fn set_oam_buf(&mut self, buf: &Vec<u8>) {
+    pub fn set_oam(&mut self, buf: &Vec<u8>) {
         self.oam.copy_from_slice(buf);
     }
 }

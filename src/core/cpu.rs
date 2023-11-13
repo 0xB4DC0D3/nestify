@@ -1515,11 +1515,24 @@ impl Memory for Cpu {
             0x4000..=0x4017 => {
                 match address {
                     0x4014 => {
-                        self.clock.borrow().ppu().borrow_mut().write_oamdma(data);
+                        let start = u16::from_le_bytes([0x00, data]);
+                        let end = start + 0x100;
 
+                        for address in start..end {
+                            let byte = self.bus
+                                .borrow_mut()
+                                .cpu_memory_map()
+                                .read(address);
+
+                            self.bus
+                                .borrow_mut()
+                                .ppu_memory_map()
+                                .set_oam_value((address & 0xFF) as u8, byte);
+                        }
+
+                        // dummy cycle
                         let odd_cycle = self.clock.borrow().get_cycles() % 2;
-
-                        self.clock.borrow_mut().tick(513 + odd_cycle);
+                        //self.clock.borrow_mut().tick(513 + odd_cycle);
                     },
                     // TODO: implement write to APU
                     _ => (),

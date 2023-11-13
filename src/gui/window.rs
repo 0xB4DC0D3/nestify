@@ -50,7 +50,7 @@ impl Window {
     }
 
     pub fn render(&mut self, ppu: &Ppu) {
-        let target_fps: u32 = 120;
+        let target_fps: u32 = 144;
         let frame_duration = Duration::from_secs(1) / target_fps;
         let last_frame_time = Instant::now();
 
@@ -60,10 +60,7 @@ impl Window {
 
         for x in 0..256 {
             for y in 0..240 {
-                let (_, color) = screen_buffer.get_pixel(
-                    x,
-                    y
-                );
+                let color = screen_buffer.get_pixel(x, y);
 
                 self.videobuffer.set_pixel(
                     x,
@@ -88,7 +85,7 @@ impl Window {
         let elapsed_time = last_frame_time.elapsed();
         if elapsed_time < frame_duration {
             let sleep_time = frame_duration - elapsed_time;
-            //std::thread::sleep(sleep_time);
+            std::thread::sleep(sleep_time);
         }
     }
 
